@@ -4,6 +4,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree as ET
 
+from src.image_handler import get_assigned_rows
+
 NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
@@ -23,7 +25,11 @@ class XlsxHyperlinkIndex:
 
     def _build_index(self, xlsx_path: Path) -> None:
         with zipfile.ZipFile(xlsx_path, "r") as archive:
-            sheet_paths = [name for name in archive.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
+            sheet_paths = [
+                name
+                for name in archive.namelist()
+                if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")
+            ]
             for sheet_path in sheet_paths:
                 drawing_path = self._get_drawing_path(archive, sheet_path)
                 if not drawing_path:
@@ -77,13 +83,35 @@ class XlsxHyperlinkIndex:
             row_node = from_node.find("xdr:row", NS)
             if row_node is None or row_node.text is None:
                 continue
-            row = int(row_node.text) + 1
+            from_row = int(row_node.text) + 1
 
+            to_node = anchor.find("xdr:to", NS)
+            if to_node is not None:
+                to_row_node = to_node.find("xdr:row", NS)
+                to_row = int(to_row_node.text) + 1 if to_row_node is not None and to_row_node.text else from_row
+            else:
+                to_row = from_row
+
+            if to_row < from_row:
+                to_row = from_row
+
+            targets: list[str] = []
             for tag_local in ("hlinkClick", "hlinkHover"):
                 for hlink in anchor.findall(f".//a:{tag_local}", NS):
-                    rel_id = hlink.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                    rel_id = hlink.attrib.get(
+                        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+                    )
                     if not rel_id:
                         continue
                     target = drawing_rels.get(rel_id)
                     if target:
-                        self._image_targets_by_row.setdefault(row, []).append(target)
+                        targets.append(target)
+
+            if not targets:
+                continue
+
+            for row in get_assigned_rows(from_row, to_row):
+                bucket = self._image_targets_by_row.setdefault(row, [])
+                for target in targets:
+                    if target not in bucket:
+                        bucket.append(target)

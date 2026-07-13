@@ -15,23 +15,61 @@ HYPERLINK_TAGS = {
 }
 
 
-def get_image_row(image: Image) -> int | None:
+def get_image_row_range(image: Image) -> tuple[int, int] | None:
     anchor = getattr(image, "anchor", None)
     if anchor is None:
         return None
+
     from_anchor = getattr(anchor, "_from", None)
     if from_anchor is None:
         return None
-    return int(from_anchor.row) + 1
+
+    from_row = int(from_anchor.row) + 1
+    to_anchor = getattr(anchor, "_to", None)
+    if to_anchor is not None and getattr(to_anchor, "row", None) is not None:
+        to_row = int(to_anchor.row) + 1
+    else:
+        to_row = from_row
+
+    if to_row < from_row:
+        to_row = from_row
+    return from_row, to_row
+
+
+def get_assigned_rows(from_row: int, to_row: int) -> range:
+    if from_row == to_row:
+        return range(from_row, from_row + 2)
+    return range(from_row, to_row + 1)
+
+
+def image_matches_row(image: Image, data_row: int) -> bool:
+    row_range = get_image_row_range(image)
+    if row_range is None:
+        return False
+    from_row, to_row = row_range
+    return data_row in get_assigned_rows(from_row, to_row)
+
+
+def get_image_row(image: Image) -> int | None:
+    row_range = get_image_row_range(image)
+    if row_range is None:
+        return None
+    return row_range[0]
 
 
 def index_images_by_row(ws: Worksheet) -> dict[int, list[Image]]:
     images_by_row: dict[int, list[Image]] = {}
+    max_row = ws.max_row or 1
+
     for image in getattr(ws, "_images", []):
-        row = get_image_row(image)
-        if row is None:
+        row_range = get_image_row_range(image)
+        if row_range is None:
             continue
-        images_by_row.setdefault(row, []).append(image)
+        from_row, to_row = row_range
+        for row in get_assigned_rows(from_row, to_row):
+            if row > max_row:
+                continue
+            images_by_row.setdefault(row, []).append(image)
     return images_by_row
 
 
@@ -63,21 +101,26 @@ def copy_image_for_row(source_image: Image) -> Image:
 
 
 def add_row_images(target_ws: Worksheet, images: list[Image]) -> None:
+    seen_ids: set[int] = set()
     for image in images:
+        image_id = id(image)
+        if image_id in seen_ids:
+            continue
+        seen_ids.add(image_id)
         copied = copy_image_for_row(image)
         target_ws.add_image(copied)
 
 
 def get_image_cell_coordinate(image: Image) -> str | None:
-    row = get_image_row(image)
+    row_range = get_image_row_range(image)
     anchor = getattr(image, "anchor", None)
-    if row is None or anchor is None:
+    if row_range is None or anchor is None:
         return None
     from_anchor = getattr(anchor, "_from", None)
     if from_anchor is None:
         return None
     col = int(from_anchor.col) + 1
-    return f"{get_column_letter(col)}{row}"
+    return f"{get_column_letter(col)}{row_range[0]}"
 
 
 def strip_hyperlinks_from_xlsx_file(xlsx_path) -> None:

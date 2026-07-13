@@ -11,7 +11,8 @@ def parse_title(body: str | None) -> str:
         return "제목없음"
     text = str(body).strip()
     if text.startswith(TITLE_PREFIX):
-        title = text[len(TITLE_PREFIX) :].strip()
+        remainder = text[len(TITLE_PREFIX) :]
+        title = remainder.splitlines()[0].strip()
         return title or "제목없음"
     return "제목없음"
 

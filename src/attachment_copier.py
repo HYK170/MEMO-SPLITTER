@@ -9,7 +9,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from src.filename_builder import unique_dest_path
 from src.hyperlink_resolver import resolve_local_path
-from src.image_handler import get_image_row
+from src.image_handler import image_matches_row
 from src.xlsx_hyperlink_index import XlsxHyperlinkIndex
 
 
@@ -40,7 +40,7 @@ def collect_row_hyperlink_targets(
             targets.append(target)
 
     for image in getattr(ws, "_images", []):
-        if get_image_row(image) != row:
+        if not image_matches_row(image, row):
             continue
         target = _get_image_hyperlink_target(image)
         if target and target not in seen:
