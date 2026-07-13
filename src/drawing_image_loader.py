@@ -240,11 +240,14 @@ def count_drawing_load_stats(
     drawing_path: str,
     drawing_rels: dict[str, str],
     max_row: int | None = None,
-) -> tuple[int, int, int, int, int | None, int | None]:
+) -> tuple[int, int, int, int, int | None, int | None, int]:
+    from src.image_handler import can_create_openpyxl_image
+
     root = ET.fromstring(archive.read(drawing_path))
     blip_total = 0
     resolved = 0
     assigned = 0
+    creatable = 0
     anchor_rows: list[int] = []
     for local_name in ("oneCellAnchor", "twoCellAnchor", "absoluteAnchor"):
         for anchor in _iter_local_name(root, local_name):
@@ -255,8 +258,14 @@ def count_drawing_load_stats(
             for blip_rel_id in blips:
                 blip_total += 1
                 raw_media_path = drawing_rels.get(blip_rel_id)
-                if raw_media_path and _resolve_media_path(archive, raw_media_path):
+                resolved_media = (
+                    _resolve_media_path(archive, raw_media_path) if raw_media_path else None
+                )
+                if resolved_media:
                     resolved += 1
+                    media_data = archive.read(resolved_media)
+                    if can_create_openpyxl_image(media_data, resolved_media):
+                        creatable += 1
                     if anchor_info is not None:
                         for row in get_assigned_rows(
                             anchor_info.from_row,
@@ -272,7 +281,7 @@ def count_drawing_load_stats(
     )
     row_min = min(anchor_rows) if anchor_rows else None
     row_max = max(anchor_rows) if anchor_rows else None
-    return row_count, blip_total, resolved, assigned, row_min, row_max
+    return row_count, blip_total, resolved, assigned, row_min, row_max, creatable
 
 
 def _load_from_drawing_xml(
@@ -302,7 +311,12 @@ def _load_from_drawing_xml(
                 continue
             media_data = archive.read(media_path)
             _assign_image_bytes_to_rows(
-                media_data, anchor_info, images_by_row, max_row, header_row
+                media_data,
+                anchor_info,
+                images_by_row,
+                max_row,
+                header_row,
+                media_path,
             )
 
 
@@ -411,13 +425,23 @@ def _find_blip_rel_ids(anchor: ET.Element) -> list[str]:
     return rel_ids
 
 
-def _create_image_from_bytes(data: bytes, anchor_info: AnchorInfo) -> Image | None:
-    try:
-        image = Image(io.BytesIO(data))
-    except Exception:
+def _create_image_from_bytes(
+    data: bytes,
+    anchor_info: AnchorInfo,
+    media_path: str = "",
+) -> Image | None:
+    from src.image_handler import create_openpyxl_image_from_bytes, emu_to_pixels
+
+    width = emu_to_pixels(anchor_info.cx) if anchor_info.cx else None
+    height = emu_to_pixels(anchor_info.cy) if anchor_info.cy else None
+    image = create_openpyxl_image_from_bytes(
+        data,
+        width=width,
+        height=height,
+        media_path=media_path,
+    )
+    if image is None:
         return None
-    image._cached_bytes = data  # noqa: SLF001
-    image._data = lambda: data  # noqa: SLF001
     _apply_anchor(image, anchor_info)
     return image
 
@@ -454,11 +478,12 @@ def _assign_image_bytes_to_rows(
     images_by_row: dict[int, list[Image]],
     max_row: int,
     header_row: int = 1,
+    media_path: str = "",
 ) -> None:
     for row in get_assigned_rows(anchor_info.from_row, anchor_info.to_row, header_row):
         if row > max_row:
             continue
-        image = _create_image_from_bytes(media_data, anchor_info)
+        image = _create_image_from_bytes(media_data, anchor_info, media_path)
         if image is None:
             continue
         images_by_row.setdefault(row, []).append(image)

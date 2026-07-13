@@ -129,9 +129,25 @@ def test_drawing_loader_finds_saved_images(tmp: Path) -> None:
     assert any(len(items) > 0 for items in drawing_index.values())
 
 
+def test_create_openpyxl_image_from_emf_bytes() -> None:
+    emf_bytes = b"\x01\x00\x00\x00" + b"\x00" * 36 + b" EMF" + b"\x00" * 64
+    from src.image_handler import create_openpyxl_image_from_bytes
+
+    image = create_openpyxl_image_from_bytes(
+        emf_bytes,
+        width=120,
+        height=80,
+        media_path="xl/media/image1.emf",
+    )
+    assert image is not None
+    assert image.format == "emf"
+    assert image._data() == emf_bytes
+
+
 def main() -> None:
     test_parse_title_first_line_only()
     test_image_matches_row_one_cell_above()
+    test_create_openpyxl_image_from_emf_bytes()
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

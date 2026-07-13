@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import zipfile
 from copy import copy
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree as ET
 
 from openpyxl.drawing.image import Image
@@ -15,6 +15,12 @@ HYPERLINK_TAGS = {
     "{http://schemas.openxmlformats.org/drawingml/2006/main}hlinkClick",
     "{http://schemas.openxmlformats.org/drawingml/2006/main}hlinkHover",
 }
+
+TINY_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc``\x00\x00"
+    b"\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def get_image_row_range(image: Image) -> tuple[int, int] | None:
@@ -96,6 +102,64 @@ def index_images_by_row(ws: Worksheet, header_row: int = 1, max_row: int | None 
     return images_by_row
 
 
+def emu_to_pixels(emu: int) -> int:
+    return max(1, int(round(emu / 9525)))
+
+
+def guess_media_format(data: bytes, media_path: str = "") -> str:
+    ext = PurePosixPath(media_path.replace("\\", "/")).suffix.lower().lstrip(".")
+    if ext in {"jpg", "jpeg", "png", "gif", "bmp", "emf", "wmf", "tiff", "tif", "webp"}:
+        return "jpeg" if ext == "jpg" else ext
+    if data.startswith(b"\x89PNG"):
+        return "png"
+    if data.startswith(b"\xff\xd8"):
+        return "jpeg"
+    if data.startswith(b"GIF8"):
+        return "gif"
+    if len(data) > 44 and data[40:44] == b" EMF":
+        return "emf"
+    if data.startswith(b"\xd7\xcd\xc6\x9a") or data.startswith(b"\x01\x00\t\x00"):
+        return "wmf"
+    return "png"
+
+
+def create_openpyxl_image_from_bytes(
+    data: bytes,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    media_path: str = "",
+    source_format: str | None = None,
+) -> Image | None:
+    try:
+        image = Image(io.BytesIO(data))
+    except Exception:
+        try:
+            image = Image(io.BytesIO(TINY_PNG_BYTES))
+        except Exception:
+            return None
+        image.format = source_format or guess_media_format(data, media_path)
+        image.width = width or 200
+        image.height = height or 150
+
+    if width:
+        image.width = width
+    if height:
+        image.height = height
+    if source_format:
+        image.format = source_format
+    elif media_path:
+        image.format = guess_media_format(data, media_path)
+
+    image._cached_bytes = data  # noqa: SLF001
+    image._data = lambda: data  # noqa: SLF001
+    return image
+
+
+def can_create_openpyxl_image(data: bytes, media_path: str = "") -> bool:
+    return create_openpyxl_image_from_bytes(data, media_path=media_path) is not None
+
+
 def strip_image_hyperlinks(image: Image) -> None:
     anchor = getattr(image, "anchor", None)
     if anchor is None:
@@ -115,11 +179,15 @@ def strip_image_hyperlinks(image: Image) -> None:
 
 def copy_image_for_row(source_image: Image) -> Image:
     data = _read_image_bytes(source_image)
-    new_image = Image(io.BytesIO(data))
-    new_image.width = source_image.width
-    new_image.height = source_image.height
+    new_image = create_openpyxl_image_from_bytes(
+        data,
+        width=int(source_image.width),
+        height=int(source_image.height),
+        source_format=getattr(source_image, "format", None) or "",
+    )
+    if new_image is None:
+        raise ValueError("시각 객체 데이터를 복사할 수 없습니다.")
     new_image.anchor = copy(source_image.anchor)
-    new_image._data = lambda: data  # noqa: SLF001 - allow repeated reads on save
     strip_image_hyperlinks(new_image)
     return new_image
 

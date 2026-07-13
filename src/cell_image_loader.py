@@ -15,7 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 REL_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 REL_EMBED_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 DISPIMG_PATTERN = re.compile(r'DISPIMG\s*\(\s*"([^"]+)"', re.IGNORECASE)
-DIAGNOSE_VERSION = "2026-07-13-e"
+DIAGNOSE_VERSION = "2026-07-13-f"
 
 
 def load_cell_images(xlsx_path: Path, ws: Worksheet, wb=None) -> dict[int, list[Image]]:
@@ -85,6 +85,11 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
 
         media_files = [n for n in names if n.startswith("xl/media/")]
         lines.append(f"xl/media 파일: {len(media_files)}개")
+        if media_files:
+            from collections import Counter
+
+            ext_counts = Counter(Path(name).suffix.lower() or "(none)" for name in media_files)
+            lines.append(f"media 확장자: {dict(ext_counts)}")
 
         id_map = _build_cellimage_id_map(archive)
         lines.append(f"cellimages ID 매핑: {len(id_map)}개")
@@ -106,11 +111,12 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
             resolved_count = 0
             assigned_at_openpyxl_max = 0
             assigned_at_xml_max = 0
+            creatable_count = 0
             anchor_row_min: int | None = None
             anchor_row_max: int | None = None
             for drawing_path in drawing_paths:
                 drawing_rels = _get_rels_map(archive, drawing_path)
-                rows, blips, resolved, assigned, row_min, row_max = count_drawing_load_stats(
+                rows, blips, resolved, assigned, row_min, row_max, created = count_drawing_load_stats(
                     archive,
                     drawing_path,
                     drawing_rels,
@@ -120,7 +126,8 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
                 blip_count += blips
                 resolved_count += resolved
                 assigned_at_openpyxl_max += assigned
-                _, _, _, assigned_xml, _, _ = count_drawing_load_stats(
+                creatable_count += created
+                _, _, _, assigned_xml, _, _, _ = count_drawing_load_stats(
                     archive,
                     drawing_path,
                     drawing_rels,
@@ -141,6 +148,7 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
                 f"행 배정 가능: openpyxl max_row({ws.max_row or 1})={assigned_at_openpyxl_max}개 / "
                 f"sheet XML max_row({xml_max_row})={assigned_at_xml_max}개"
             )
+            lines.append(f"openpyxl 객체 생성 가능: {creatable_count}개 (EMF/WMF 등 PIL 비지원 포함)")
 
         openpyxl_images = getattr(ws, "_images", [])
         lines.append(f"openpyxl _images: {len(openpyxl_images)}개")

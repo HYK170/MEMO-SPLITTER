@@ -81,7 +81,7 @@ def split_workbook(
         cell_count = sum(len(v) for v in load_cell_images(config.input_path, ws, wb).values())
         image_count = sum(len(items) for items in images_by_row.values())
         log(
-            f"이미지 {image_count}개 인식 "
+            f"시각 객체 {image_count}개 인식 "
             f"(openpyxl {openpyxl_count}, drawing {drawing_count}, cell {cell_count})"
         )
         if image_count == 0:
