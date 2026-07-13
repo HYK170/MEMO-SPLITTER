@@ -9,7 +9,8 @@ from openpyxl import load_workbook
 
 from src.attachment_copier import copy_attachments_for_row
 from src.filename_builder import build_row_folder_name, build_xlsx_filename
-from src.image_handler import add_row_images, index_images_by_row, strip_hyperlinks_from_xlsx_file
+from src.drawing_image_loader import build_images_by_row
+from src.image_handler import add_row_images, strip_hyperlinks_from_xlsx_file
 from src.sheet_copier import create_split_workbook, is_row_empty
 from src.xlsx_hyperlink_index import XlsxHyperlinkIndex
 
@@ -70,7 +71,9 @@ def split_workbook(
         column_map = _build_column_map(ws, config.header_row)
         _ensure_required_columns(column_map)
 
-        images_by_row = index_images_by_row(ws)
+        images_by_row = build_images_by_row(config.input_path, ws)
+        image_count = sum(len(items) for items in images_by_row.values())
+        log(f"이미지 {image_count}개 인식")
         image_index = XlsxHyperlinkIndex(config.input_path)
         base_name = config.input_path.stem
         min_col = ws.min_column or 1
@@ -115,6 +118,7 @@ def split_workbook(
                 row_images = images_by_row.get(data_row, [])
                 if row_images:
                     add_row_images(out_ws, row_images)
+                    log(f"  이미지 {len(row_images)}개 포함")
                 out_wb.save(xlsx_path)
                 out_wb.close()
                 del out_wb

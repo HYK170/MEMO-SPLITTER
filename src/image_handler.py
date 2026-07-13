@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 import zipfile
 from copy import copy
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from openpyxl.drawing.image import Image
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.worksheet.worksheet import Worksheet
 
 HYPERLINK_TAGS = {
@@ -20,12 +22,19 @@ def get_image_row_range(image: Image) -> tuple[int, int] | None:
     if anchor is None:
         return None
 
+    if isinstance(anchor, str):
+        parsed = _parse_string_anchor(anchor)
+        if parsed is None:
+            return None
+        from_row, to_row, _ = parsed
+        return from_row, to_row
+
     from_anchor = getattr(anchor, "_from", None)
     if from_anchor is None:
         return None
 
     from_row = int(from_anchor.row) + 1
-    to_anchor = getattr(anchor, "_to", None)
+    to_anchor = getattr(anchor, "to", None) or getattr(anchor, "_to", None)
     if to_anchor is not None and getattr(to_anchor, "row", None) is not None:
         to_row = int(to_anchor.row) + 1
     else:
@@ -34,6 +43,15 @@ def get_image_row_range(image: Image) -> tuple[int, int] | None:
     if to_row < from_row:
         to_row = from_row
     return from_row, to_row
+
+
+def _parse_string_anchor(anchor: str) -> tuple[int, int, int] | None:
+    cleaned = anchor.replace("$", "").strip()
+    try:
+        _, row = coordinate_from_string(cleaned)
+    except ValueError:
+        return None
+    return row, row, 0
 
 
 def get_assigned_rows(from_row: int, to_row: int) -> range:
@@ -91,13 +109,45 @@ def strip_image_hyperlinks(image: Image) -> None:
 
 
 def copy_image_for_row(source_image: Image) -> Image:
-    data = source_image._data()
+    data = _read_image_bytes(source_image)
     new_image = Image(io.BytesIO(data))
     new_image.width = source_image.width
     new_image.height = source_image.height
     new_image.anchor = copy(source_image.anchor)
+    new_image._data = lambda: data  # noqa: SLF001 - allow repeated reads on save
     strip_image_hyperlinks(new_image)
     return new_image
+
+
+def _read_image_bytes(source_image: Image) -> bytes:
+    cached = getattr(source_image, "_cached_bytes", None)
+    if cached is not None:
+        return cached
+
+    ref = getattr(source_image, "ref", None)
+    if isinstance(ref, (str, Path)):
+        ref_path = Path(ref)
+        if ref_path.is_file():
+            data_bytes = ref_path.read_bytes()
+            source_image._cached_bytes = data_bytes  # noqa: SLF001
+            return data_bytes
+
+    try:
+        data = source_image._data()
+    except (ValueError, OSError):
+        internal = getattr(source_image, "_image", None)
+        if internal is None:
+            raise
+        internal.seek(0)
+        data = internal.read()
+
+    if isinstance(data, (bytes, bytearray)):
+        data_bytes = bytes(data)
+    else:
+        data_bytes = bytes(data.read())
+
+    source_image._cached_bytes = data_bytes  # noqa: SLF001
+    return data_bytes
 
 
 def add_row_images(target_ws: Worksheet, images: list[Image]) -> None:

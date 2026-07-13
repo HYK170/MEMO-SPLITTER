@@ -17,6 +17,8 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 from src.filename_builder import parse_title
 from src.hyperlink_resolver import resolve_local_path
 from src.image_handler import image_matches_row
+from src.drawing_image_loader import build_images_by_row, load_drawing_images
+from src.image_handler import index_images_by_row
 from src.splitter import SplitConfig, split_workbook
 
 
@@ -93,6 +95,25 @@ def test_image_matches_row_one_cell_above() -> None:
     assert not image_matches_row(image, 3), "should not match row 4 when assigned to row 5"
 
 
+def test_drawing_loader_finds_saved_images(tmp: Path) -> None:
+    input_path = tmp / "memo.xlsx"
+    attachment = tmp / "sample attachment.txt"
+    attachment.write_text("attachment content", encoding="utf-8")
+    create_sample_workbook(input_path, attachment)
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(input_path, data_only=False)
+    ws = wb.active
+    ws._images = []
+    wb.close()
+
+    drawing_index = load_drawing_images(input_path, load_workbook(input_path).active)
+    load_workbook(input_path).close()
+    assert drawing_index, "drawing XML loader should find images even when ws._images is empty"
+    assert any(len(items) > 0 for items in drawing_index.values())
+
+
 def main() -> None:
     test_parse_title_first_line_only()
     test_image_matches_row_one_cell_above()
@@ -108,6 +129,7 @@ def main() -> None:
         output_root.mkdir()
 
         create_sample_workbook(input_path, attachment)
+        test_drawing_loader_finds_saved_images(root)
 
         result = split_workbook(
             SplitConfig(
