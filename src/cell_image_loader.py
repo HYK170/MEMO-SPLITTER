@@ -15,6 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 REL_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 REL_EMBED_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 DISPIMG_PATTERN = re.compile(r'DISPIMG\s*\(\s*"([^"]+)"', re.IGNORECASE)
+DIAGNOSE_VERSION = "2026-07-13-c"
 
 
 def load_cell_images(xlsx_path: Path, ws: Worksheet, wb=None) -> dict[int, list[Image]]:
@@ -37,6 +38,7 @@ def load_cell_images(xlsx_path: Path, ws: Worksheet, wb=None) -> dict[int, list[
 
 def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]:
     lines: list[str] = []
+    lines.append(f"진단 버전: {DIAGNOSE_VERSION}")
     with zipfile.ZipFile(xlsx_path, "r") as archive:
         names = archive.namelist()
         xml_sheet_names = list_workbook_sheet_names(archive)
