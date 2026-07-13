@@ -13,7 +13,13 @@ from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.worksheet.worksheet import Worksheet
 
+from src.cell_image_loader import load_cell_images
 from src.image_handler import get_assigned_rows
+
+
+def _iter_local_name(root: ET.Element, local_name: str) -> list[ET.Element]:
+    suffix = f"}}{local_name}"
+    return [el for el in root.iter() if el.tag.endswith(suffix) or el.tag == local_name]
 
 NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -45,61 +51,39 @@ class AnchorInfo:
     is_one_cell: bool = True
 
 
-def load_drawing_images(xlsx_path: Path, ws: Worksheet) -> dict[int, list[Image]]:
+def load_drawing_images(
+    xlsx_path: Path,
+    ws: Worksheet,
+    wb=None,
+    header_row: int = 1,
+) -> dict[int, list[Image]]:
     images_by_row: dict[int, list[Image]] = {}
     max_row = ws.max_row or 1
 
     with zipfile.ZipFile(xlsx_path, "r") as archive:
-        sheet_path = _resolve_sheet_path(archive, ws)
+        sheet_path = _resolve_sheet_path(archive, ws, wb)
         if not sheet_path:
             return {}
 
-        drawing_path = _get_related_path(archive, sheet_path, "drawing")
-        if drawing_path:
+        drawing_paths = _get_all_related_paths(archive, sheet_path, "drawing")
+        for drawing_path in drawing_paths:
             drawing_rels = _get_rels_map(archive, drawing_path)
-            _load_from_drawing_xml(archive, drawing_path, drawing_rels, images_by_row, max_row)
+            _load_from_drawing_xml(
+                archive, drawing_path, drawing_rels, images_by_row, max_row, header_row
+            )
 
-        vml_path = _get_related_path(archive, sheet_path, "vmlDrawing")
-        if vml_path:
+        vml_paths = _get_all_related_paths(archive, sheet_path, "vmlDrawing")
+        for vml_path in vml_paths:
             vml_rels = _get_rels_map(archive, vml_path)
-            _load_from_vml(archive, vml_path, vml_rels, images_by_row, max_row)
+            _load_from_vml(archive, vml_path, vml_rels, images_by_row, max_row, header_row)
 
     return images_by_row
 
 
-def _resolve_sheet_path(archive: zipfile.ZipFile, ws: Worksheet) -> str | None:
-    sheet_path = getattr(ws, "path", None)
-    if sheet_path:
-        normalized = sheet_path.replace("\\", "/").lstrip("/")
-        if normalized in archive.namelist():
-            return normalized
+def _resolve_sheet_path(archive: zipfile.ZipFile, ws: Worksheet, wb=None) -> str | None:
+    from src.sheet_path import resolve_sheet_path
 
-    return _resolve_sheet_path_by_name(archive, ws.title)
-
-
-def _resolve_sheet_path_by_name(archive: zipfile.ZipFile, sheet_name: str) -> str | None:
-    workbook_path = "xl/workbook.xml"
-    workbook_rels_path = "xl/_rels/workbook.xml.rels"
-    if workbook_path not in archive.namelist() or workbook_rels_path not in archive.namelist():
-        return None
-
-    workbook_root = ET.fromstring(archive.read(workbook_path))
-    workbook_rels = _get_rels_map(archive, workbook_path)
-
-    sheet_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"
-    for sheet in workbook_root.findall(f".//{sheet_tag}"):
-        if sheet.attrib.get("name") != sheet_name:
-            continue
-        rel_id = sheet.attrib.get(REL_ID_ATTR)
-        if not rel_id:
-            continue
-        target = workbook_rels.get(rel_id)
-        if not target:
-            continue
-        normalized = _normalize_zip_path(target)
-        if normalized in archive.namelist():
-            return normalized
-    return None
+    return resolve_sheet_path(archive, ws, wb)
 
 
 def merge_images_by_row(
@@ -124,13 +108,20 @@ def merge_images_by_row(
     return merged
 
 
-def build_images_by_row(xlsx_path: Path, ws: Worksheet) -> dict[int, list[Image]]:
+def build_images_by_row(
+    xlsx_path: Path,
+    ws: Worksheet,
+    wb=None,
+    header_row: int = 1,
+) -> dict[int, list[Image]]:
     from src.image_handler import index_images_by_row
 
     max_row = ws.max_row or 1
-    openpyxl_index = index_images_by_row(ws)
-    drawing_index = load_drawing_images(xlsx_path, ws)
-    return merge_images_by_row(openpyxl_index, drawing_index, max_row)
+    openpyxl_index = index_images_by_row(ws, header_row)
+    drawing_index = load_drawing_images(xlsx_path, ws, wb, header_row)
+    cell_index = load_cell_images(xlsx_path, ws, wb)
+    merged = merge_images_by_row(openpyxl_index, drawing_index, max_row)
+    return merge_images_by_row(merged, cell_index, max_row)
 
 
 def _image_dedupe_key(image: Image) -> str:
@@ -167,35 +158,32 @@ def _resolve_target(base_path: str, target: str) -> str:
     return _normalize_zip_path(str(base / target))
 
 
-def _get_related_path(archive: zipfile.ZipFile, sheet_path: str, rel_keyword: str) -> str | None:
+def _get_all_related_paths(archive: zipfile.ZipFile, sheet_path: str, rel_keyword: str) -> list[str]:
     normalized_sheet = sheet_path.replace("\\", "/").lstrip("/")
     rels_path = normalized_sheet.replace("xl/worksheets/", "xl/worksheets/_rels/") + ".rels"
     if rels_path not in archive.namelist():
-        return None
+        return []
     root = ET.fromstring(archive.read(rels_path))
+    paths: list[str] = []
     for rel in root.findall("rel:Relationship", NS):
         rel_type = rel.attrib.get("Type", "")
         if rel_keyword not in rel_type:
             continue
         target = _resolve_target(normalized_sheet, rel.attrib.get("Target", ""))
         if target in archive.namelist():
-            return target
-    return None
+            paths.append(target)
+    return paths
+
+
+def _get_related_path(archive: zipfile.ZipFile, sheet_path: str, rel_keyword: str) -> str | None:
+    paths = _get_all_related_paths(archive, sheet_path, rel_keyword)
+    return paths[0] if paths else None
 
 
 def _get_rels_map(archive: zipfile.ZipFile, resource_path: str) -> dict[str, str]:
-    normalized_resource = resource_path.replace("\\", "/").lstrip("/")
-    rels_path = str(PurePosixPath(normalized_resource).parent / "_rels" / f"{PurePosixPath(normalized_resource).name}.rels")
-    if rels_path not in archive.namelist():
-        return {}
-    root = ET.fromstring(archive.read(rels_path))
-    rels: dict[str, str] = {}
-    for rel in root.findall("rel:Relationship", NS):
-        rel_id = rel.attrib.get("Id")
-        if not rel_id:
-            continue
-        rels[rel_id] = _resolve_target(normalized_resource, rel.attrib.get("Target", ""))
-    return rels
+    from src.sheet_path import get_rels_map
+
+    return get_rels_map(archive, resource_path)
 
 
 def _load_from_drawing_xml(
@@ -204,36 +192,42 @@ def _load_from_drawing_xml(
     drawing_rels: dict[str, str],
     images_by_row: dict[int, list[Image]],
     max_row: int,
+    header_row: int = 1,
 ) -> None:
     root = ET.fromstring(archive.read(drawing_path))
-    anchor_tags = ("xdr:oneCellAnchor", "xdr:twoCellAnchor", "xdr:absoluteAnchor")
-    for tag in anchor_tags:
-        for anchor in root.findall(f".//{tag}", NS):
-            anchor_info = _parse_drawing_anchor(anchor, tag)
-            if anchor_info is None:
+    anchor_elements: list[tuple[ET.Element, str]] = []
+    for local_name in ("oneCellAnchor", "twoCellAnchor", "absoluteAnchor"):
+        for anchor in _iter_local_name(root, local_name):
+            anchor_elements.append((anchor, local_name))
+
+    for anchor, local_name in anchor_elements:
+        anchor_info = _parse_drawing_anchor(anchor, local_name)
+        if anchor_info is None:
+            continue
+        for blip_rel_id in _find_blip_rel_ids(anchor):
+            media_path = drawing_rels.get(blip_rel_id)
+            if not media_path or media_path not in archive.namelist():
                 continue
-            for blip_rel_id in _find_blip_rel_ids(anchor):
-                media_path = drawing_rels.get(blip_rel_id)
-                if not media_path or media_path not in archive.namelist():
-                    continue
-                media_data = archive.read(media_path)
-                _assign_image_bytes_to_rows(media_data, anchor_info, images_by_row, max_row)
+            media_data = archive.read(media_path)
+            _assign_image_bytes_to_rows(
+                media_data, anchor_info, images_by_row, max_row, header_row
+            )
 
 
 def _parse_drawing_anchor(anchor: ET.Element, tag: str) -> AnchorInfo | None:
-    if tag.endswith("absoluteAnchor"):
+    if tag == "absoluteAnchor":
         return _parse_absolute_anchor(anchor)
-    if tag.endswith("twoCellAnchor"):
+    if tag == "twoCellAnchor":
         return _parse_two_cell_anchor(anchor)
     return _parse_one_cell_anchor(anchor)
 
 
 def _parse_one_cell_anchor(anchor: ET.Element) -> AnchorInfo | None:
-    from_node = anchor.find("xdr:from", NS)
+    from_node = _find_child(anchor, "from")
     if from_node is None:
         return None
     from_row, from_col, row_off, col_off = _read_marker(from_node)
-    ext = anchor.find("xdr:ext", NS)
+    ext = _find_child(anchor, "ext")
     cx, cy = _read_ext(ext)
     return AnchorInfo(
         from_row=from_row,
@@ -247,9 +241,21 @@ def _parse_one_cell_anchor(anchor: ET.Element) -> AnchorInfo | None:
     )
 
 
+def _find_child(parent: ET.Element, local_name: str) -> ET.Element | None:
+    for child in parent:
+        if child.tag.endswith(f"}}{local_name}") or child.tag == local_name:
+            return child
+    return None
+
+
+def _find_child_text(parent: ET.Element, local_name: str) -> str | None:
+    child = _find_child(parent, local_name)
+    return child.text if child is not None else None
+
+
 def _parse_two_cell_anchor(anchor: ET.Element) -> AnchorInfo | None:
-    from_node = anchor.find("xdr:from", NS)
-    to_node = anchor.find("xdr:to", NS)
+    from_node = _find_child(anchor, "from")
+    to_node = _find_child(anchor, "to")
     if from_node is None or to_node is None:
         return None
     from_row, from_col, row_off, col_off = _read_marker(from_node)
@@ -268,8 +274,8 @@ def _parse_two_cell_anchor(anchor: ET.Element) -> AnchorInfo | None:
 
 
 def _parse_absolute_anchor(anchor: ET.Element) -> AnchorInfo | None:
-    pos = anchor.find("xdr:pos", NS)
-    ext = anchor.find("xdr:ext", NS)
+    pos = _find_child(anchor, "pos")
+    ext = _find_child(anchor, "ext")
     if pos is None:
         return None
     x = int(pos.attrib.get("x", "0"))
@@ -289,10 +295,10 @@ def _parse_absolute_anchor(anchor: ET.Element) -> AnchorInfo | None:
 
 
 def _read_marker(node: ET.Element) -> tuple[int, int, int, int]:
-    row = int((node.findtext("xdr:row", default="0", namespaces=NS) or "0")) + 1
-    col = int((node.findtext("xdr:col", default="0", namespaces=NS) or "0"))
-    row_off = int((node.findtext("xdr:rowOff", default="0", namespaces=NS) or "0"))
-    col_off = int((node.findtext("xdr:colOff", default="0", namespaces=NS) or "0"))
+    row = int(_find_child_text(node, "row") or "0") + 1
+    col = int(_find_child_text(node, "col") or "0")
+    row_off = int(_find_child_text(node, "rowOff") or "0")
+    col_off = int(_find_child_text(node, "colOff") or "0")
     return row, col, row_off, col_off
 
 
@@ -305,7 +311,7 @@ def _read_ext(ext: ET.Element | None) -> tuple[int, int]:
 def _find_blip_rel_ids(anchor: ET.Element) -> list[str]:
     rel_ids: list[str] = []
     seen: set[str] = set()
-    for blip in anchor.findall(".//a:blip", NS):
+    for blip in _iter_local_name(anchor, "blip"):
         rel_id = blip.attrib.get(REL_EMBED_ATTR) or blip.attrib.get(REL_ID_ATTR)
         if rel_id and rel_id not in seen:
             seen.add(rel_id)
@@ -355,8 +361,9 @@ def _assign_image_bytes_to_rows(
     anchor_info: AnchorInfo,
     images_by_row: dict[int, list[Image]],
     max_row: int,
+    header_row: int = 1,
 ) -> None:
-    for row in get_assigned_rows(anchor_info.from_row, anchor_info.to_row):
+    for row in get_assigned_rows(anchor_info.from_row, anchor_info.to_row, header_row):
         if row > max_row:
             continue
         image = _create_image_from_bytes(media_data, anchor_info)
@@ -371,6 +378,7 @@ def _load_from_vml(
     vml_rels: dict[str, str],
     images_by_row: dict[int, list[Image]],
     max_row: int,
+    header_row: int = 1,
 ) -> None:
     root = ET.fromstring(archive.read(vml_path))
     for shape in root.findall(".//v:shape", VML_NS):
@@ -391,7 +399,9 @@ def _load_from_vml(
         anchor_info = _parse_vml_anchor(shape)
         if anchor_info is None:
             continue
-        _assign_image_bytes_to_rows(media_data, anchor_info, images_by_row, max_row)
+        _assign_image_bytes_to_rows(
+            media_data, anchor_info, images_by_row, max_row, header_row
+        )
 
 
 def _parse_vml_anchor(shape: ET.Element) -> AnchorInfo | None:

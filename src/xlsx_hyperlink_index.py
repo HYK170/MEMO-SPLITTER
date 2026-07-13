@@ -16,7 +16,8 @@ NS = {
 
 
 class XlsxHyperlinkIndex:
-    def __init__(self, xlsx_path: Path) -> None:
+    def __init__(self, xlsx_path: Path, header_row: int = 1) -> None:
+        self._header_row = header_row
         self._image_targets_by_row: dict[int, list[str]] = {}
         self._build_index(xlsx_path)
 
@@ -110,7 +111,7 @@ class XlsxHyperlinkIndex:
             if not targets:
                 continue
 
-            for row in get_assigned_rows(from_row, to_row):
+            for row in get_assigned_rows(from_row, to_row, self._header_row):
                 bucket = self._image_targets_by_row.setdefault(row, [])
                 for target in targets:
                     if target not in bucket:

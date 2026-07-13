@@ -54,18 +54,21 @@ def _parse_string_anchor(anchor: str) -> tuple[int, int, int] | None:
     return row, row, 0
 
 
-def get_assigned_rows(from_row: int, to_row: int) -> range:
+def get_assigned_rows(from_row: int, to_row: int, header_row: int = 1) -> range:
     if from_row == to_row:
+        first_data_row = header_row + 1
+        if from_row - 1 == first_data_row:
+            return range(from_row - 1, from_row + 1)
         return range(from_row, from_row + 2)
     return range(from_row, to_row + 1)
 
 
-def image_matches_row(image: Image, data_row: int) -> bool:
+def image_matches_row(image: Image, data_row: int, header_row: int = 1) -> bool:
     row_range = get_image_row_range(image)
     if row_range is None:
         return False
     from_row, to_row = row_range
-    return data_row in get_assigned_rows(from_row, to_row)
+    return data_row in get_assigned_rows(from_row, to_row, header_row)
 
 
 def get_image_row(image: Image) -> int | None:
@@ -75,16 +78,17 @@ def get_image_row(image: Image) -> int | None:
     return row_range[0]
 
 
-def index_images_by_row(ws: Worksheet) -> dict[int, list[Image]]:
+def index_images_by_row(ws: Worksheet, header_row: int = 1) -> dict[int, list[Image]]:
     images_by_row: dict[int, list[Image]] = {}
     max_row = ws.max_row or 1
 
     for image in getattr(ws, "_images", []):
+        _read_image_bytes(image)
         row_range = get_image_row_range(image)
         if row_range is None:
             continue
         from_row, to_row = row_range
-        for row in get_assigned_rows(from_row, to_row):
+        for row in get_assigned_rows(from_row, to_row, header_row):
             if row > max_row:
                 continue
             images_by_row.setdefault(row, []).append(image)

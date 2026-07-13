@@ -22,6 +22,14 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## 이미지 진단 (문제 발생 시)
+
+프로젝트 폴더에서 아래 명령을 실행하세요. `PYTHONPATH` 설정은 필요 없습니다.
+
+```powershell
+python scripts/diagnose_xlsx.py "INPUT.xlsx" "메모"
+```
+
 ## 사용 방법
 
 1. **INPUT XLSX** — 분할할 원본 Excel 파일

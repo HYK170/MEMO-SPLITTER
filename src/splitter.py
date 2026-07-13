@@ -71,10 +71,16 @@ def split_workbook(
         column_map = _build_column_map(ws, config.header_row)
         _ensure_required_columns(column_map)
 
-        images_by_row = build_images_by_row(config.input_path, ws)
+        images_by_row = build_images_by_row(config.input_path, ws, wb, config.header_row)
         image_count = sum(len(items) for items in images_by_row.values())
         log(f"이미지 {image_count}개 인식")
-        image_index = XlsxHyperlinkIndex(config.input_path)
+        if image_count == 0:
+            from src.cell_image_loader import diagnose_image_sources
+
+            log("이미지 진단:")
+            for line in diagnose_image_sources(config.input_path, ws, wb):
+                log(f"  {line}")
+        image_index = XlsxHyperlinkIndex(config.input_path, config.header_row)
         base_name = config.input_path.stem
         min_col = ws.min_column or 1
         max_col = ws.max_column or 1
@@ -130,7 +136,12 @@ def split_workbook(
                 continue
 
             attachment_result = copy_attachments_for_row(
-                ws, data_row, config.input_path, row_folder, image_index
+                ws,
+                data_row,
+                config.input_path,
+                row_folder,
+                image_index,
+                config.header_row,
             )
             result.folders_created += 1
             result.attachments_copied += len(attachment_result.copied)

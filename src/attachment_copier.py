@@ -23,6 +23,7 @@ def collect_row_hyperlink_targets(
     ws: Worksheet,
     row: int,
     image_index: XlsxHyperlinkIndex | None = None,
+    header_row: int = 1,
 ) -> list[str]:
     targets: list[str] = []
     seen: set[str] = set()
@@ -40,7 +41,7 @@ def collect_row_hyperlink_targets(
             targets.append(target)
 
     for image in getattr(ws, "_images", []):
-        if not image_matches_row(image, row):
+        if not image_matches_row(image, row, header_row):
             continue
         target = _get_image_hyperlink_target(image)
         if target and target not in seen:
@@ -62,10 +63,11 @@ def copy_attachments_for_row(
     input_xlsx: Path,
     dest_folder: Path,
     image_index: XlsxHyperlinkIndex | None = None,
+    header_row: int = 1,
 ) -> AttachmentCopyResult:
     base_dir = input_xlsx.parent
     result = AttachmentCopyResult()
-    targets = collect_row_hyperlink_targets(ws, row, image_index)
+    targets = collect_row_hyperlink_targets(ws, row, image_index, header_row)
 
     for target in targets:
         local_path = resolve_local_path(target, base_dir)

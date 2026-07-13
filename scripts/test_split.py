@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from io import BytesIO
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image
@@ -87,12 +92,22 @@ def test_image_matches_row_one_cell_above() -> None:
         b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc``\x00\x00"
         b"\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
     )
-    image = Image(BytesIO(png_bytes))
-    marker = AnchorMarker(col=0, row=3, colOff=0, rowOff=0)
-    image.anchor = OneCellAnchor(_from=marker, ext=XDRPositiveSize2D(pixels_to_EMU(32), pixels_to_EMU(32)))
 
-    assert image_matches_row(image, 4), "oneCell anchor on row 4 should match data row 5"
-    assert not image_matches_row(image, 3), "should not match row 4 when assigned to row 5"
+    # Samsung Notes 패턴: anchor가 Excel 3행이면 데이터 2행에도 매칭
+    image = Image(BytesIO(png_bytes))
+    marker = AnchorMarker(col=0, row=2, colOff=0, rowOff=0)
+    image.anchor = OneCellAnchor(_from=marker, ext=XDRPositiveSize2D(pixels_to_EMU(32), pixels_to_EMU(32)))
+    assert image_matches_row(image, 2), "anchor row 3 should match data row 2"
+    assert image_matches_row(image, 3), "anchor row 3 should match itself"
+
+    # 일반 oneCell: anchor 행과 인접 행(±1)에 매칭
+    image_below = Image(BytesIO(png_bytes))
+    marker_below = AnchorMarker(col=0, row=3, colOff=0, rowOff=0)
+    image_below.anchor = OneCellAnchor(
+        _from=marker_below, ext=XDRPositiveSize2D(pixels_to_EMU(32), pixels_to_EMU(32))
+    )
+    assert image_matches_row(image_below, 4), "anchor row 4 should match data row 4"
+    assert not image_matches_row(image_below, 3), "anchor row 4 should not match row 3"
 
 
 def test_drawing_loader_finds_saved_images(tmp: Path) -> None:
