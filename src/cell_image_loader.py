@@ -46,10 +46,32 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
         sheet_path = _resolve_sheet_path(archive, ws, wb)
         lines.append(f"시트 XML: {sheet_path or '찾을 수 없음'}")
 
-        drawing_paths = _find_sheet_related_paths(archive, sheet_path, "drawing") if sheet_path else []
-        vml_paths = _find_sheet_related_paths(archive, sheet_path, "vmlDrawing") if sheet_path else []
+        if sheet_path:
+            from src.sheet_path import list_sheet_relationships
+
+            rels = list_sheet_relationships(archive, sheet_path)
+            lines.append(f"시트 rels: {rels or '없음'}")
+
+        from src.sheet_path import discover_drawing_paths, discover_vml_paths, list_package_drawing_parts
+
+        drawing_paths = discover_drawing_paths(archive, sheet_path, ws, wb) if sheet_path else []
+        vml_paths = discover_vml_paths(archive, sheet_path, ws, wb) if sheet_path else []
         lines.append(f"drawing XML: {len(drawing_paths)}개 {drawing_paths}")
         lines.append(f"VML drawing: {len(vml_paths)}개 {vml_paths}")
+
+        package_drawings = list_package_drawing_parts(archive)
+        lines.append(f"패키지 drawing 전체: {len(package_drawings)}개")
+        for drawing_path in package_drawings[:5]:
+            root = ET.fromstring(archive.read(drawing_path))
+            blip_count = len(_iter_local_name(root, "blip"))
+            anchor_count = (
+                len(_iter_local_name(root, "oneCellAnchor"))
+                + len(_iter_local_name(root, "twoCellAnchor"))
+                + len(_iter_local_name(root, "absoluteAnchor"))
+            )
+            lines.append(f"  {drawing_path}: anchor {anchor_count}개, blip {blip_count}개")
+        if len(package_drawings) > 5:
+            lines.append(f"  ... 외 {len(package_drawings) - 5}개")
 
         cellimage_parts = [n for n in names if "cellimage" in n.lower() and n.endswith(".xml") and "_rels" not in n]
         lines.append(f"cellimages.xml: {cellimage_parts or '없음'}")

@@ -66,6 +66,10 @@ def load_drawing_images(
             return {}
 
         drawing_paths = _get_all_related_paths(archive, sheet_path, "drawing")
+        if not drawing_paths:
+            from src.sheet_path import discover_drawing_paths
+
+            drawing_paths = discover_drawing_paths(archive, sheet_path, ws, wb)
         for drawing_path in drawing_paths:
             drawing_rels = _get_rels_map(archive, drawing_path)
             _load_from_drawing_xml(
@@ -73,6 +77,10 @@ def load_drawing_images(
             )
 
         vml_paths = _get_all_related_paths(archive, sheet_path, "vmlDrawing")
+        if not vml_paths:
+            from src.sheet_path import discover_vml_paths
+
+            vml_paths = discover_vml_paths(archive, sheet_path, ws, wb)
         for vml_path in vml_paths:
             vml_rels = _get_rels_map(archive, vml_path)
             _load_from_vml(archive, vml_path, vml_rels, images_by_row, max_row, header_row)
@@ -159,20 +167,9 @@ def _resolve_target(base_path: str, target: str) -> str:
 
 
 def _get_all_related_paths(archive: zipfile.ZipFile, sheet_path: str, rel_keyword: str) -> list[str]:
-    normalized_sheet = sheet_path.replace("\\", "/").lstrip("/")
-    rels_path = normalized_sheet.replace("xl/worksheets/", "xl/worksheets/_rels/") + ".rels"
-    if rels_path not in archive.namelist():
-        return []
-    root = ET.fromstring(archive.read(rels_path))
-    paths: list[str] = []
-    for rel in root.findall("rel:Relationship", NS):
-        rel_type = rel.attrib.get("Type", "")
-        if rel_keyword not in rel_type:
-            continue
-        target = _resolve_target(normalized_sheet, rel.attrib.get("Target", ""))
-        if target in archive.namelist():
-            paths.append(target)
-    return paths
+    from src.sheet_path import find_sheet_related_paths
+
+    return find_sheet_related_paths(archive, sheet_path, rel_keyword)
 
 
 def _get_related_path(archive: zipfile.ZipFile, sheet_path: str, rel_keyword: str) -> str | None:
