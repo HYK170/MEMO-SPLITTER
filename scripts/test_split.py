@@ -107,7 +107,7 @@ def test_image_matches_row_one_cell_above() -> None:
         _from=marker_below, ext=XDRPositiveSize2D(pixels_to_EMU(32), pixels_to_EMU(32))
     )
     assert image_matches_row(image_below, 4), "anchor row 4 should match data row 4"
-    assert not image_matches_row(image_below, 3), "anchor row 4 should not match row 3"
+    assert image_matches_row(image_below, 3), "oneCell anchor includes row above"
 
 
 def test_drawing_loader_finds_saved_images(tmp: Path) -> None:

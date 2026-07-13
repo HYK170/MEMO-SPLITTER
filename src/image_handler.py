@@ -62,10 +62,9 @@ def _parse_string_anchor(anchor: str) -> tuple[int, int, int] | None:
 
 def get_assigned_rows(from_row: int, to_row: int, header_row: int = 1) -> range:
     if from_row == to_row:
-        first_data_row = header_row + 1
-        if from_row - 1 == first_data_row:
-            return range(from_row - 1, from_row + 1)
-        return range(from_row, from_row + 2)
+        start = max(header_row + 1, from_row - 1)
+        end = from_row + 1
+        return range(start, end + 1)
     return range(from_row, to_row + 1)
 
 
@@ -158,6 +157,37 @@ def create_openpyxl_image_from_bytes(
 
 def can_create_openpyxl_image(data: bytes, media_path: str = "") -> bool:
     return create_openpyxl_image_from_bytes(data, media_path=media_path) is not None
+
+
+def collect_objects_for_row(
+    objects: list,
+    data_row: int,
+    header_row: int = 1,
+) -> list:
+    seen: set[int] = set()
+    matched: list = []
+    for obj in objects:
+        obj_id = id(obj)
+        if obj_id in seen:
+            continue
+        if not image_matches_row(obj, data_row, header_row):
+            continue
+        seen.add(obj_id)
+        matched.append(obj)
+    return matched
+
+
+def flatten_unique_objects(images_by_row: dict[int, list]) -> list:
+    seen: set[int] = set()
+    objects: list = []
+    for items in images_by_row.values():
+        for item in items:
+            item_id = id(item)
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            objects.append(item)
+    return objects
 
 
 def strip_image_hyperlinks(image: Image) -> None:
