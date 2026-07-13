@@ -56,14 +56,19 @@ def load_drawing_images(
     ws: Worksheet,
     wb=None,
     header_row: int = 1,
+    max_row: int | None = None,
 ) -> dict[int, list[Image]]:
     images_by_row: dict[int, list[Image]] = {}
-    max_row = ws.max_row or 1
 
     with zipfile.ZipFile(xlsx_path, "r") as archive:
         sheet_path = _resolve_sheet_path(archive, ws, wb)
         if not sheet_path:
             return {}
+
+        if max_row is None:
+            from src.sheet_path import get_effective_max_row
+
+            max_row = get_effective_max_row(ws, archive, sheet_path)
 
         drawing_paths = _get_all_related_paths(archive, sheet_path, "drawing")
         if not drawing_paths:
@@ -99,6 +104,11 @@ def merge_images_by_row(
     drawing_index: dict[int, list[Image]],
     max_row: int,
 ) -> dict[int, list[Image]]:
+    max_row = max(
+        max_row,
+        max(openpyxl_index.keys(), default=0),
+        max(drawing_index.keys(), default=0),
+    )
     merged: dict[int, list[Image]] = {}
     seen: set[str] = set()
 
@@ -123,10 +133,14 @@ def build_images_by_row(
     header_row: int = 1,
 ) -> dict[int, list[Image]]:
     from src.image_handler import index_images_by_row
+    from src.sheet_path import get_effective_max_row, resolve_sheet_path
 
-    max_row = ws.max_row or 1
-    openpyxl_index = index_images_by_row(ws, header_row)
-    drawing_index = load_drawing_images(xlsx_path, ws, wb, header_row)
+    with zipfile.ZipFile(xlsx_path, "r") as archive:
+        sheet_path = resolve_sheet_path(archive, ws, wb)
+        max_row = get_effective_max_row(ws, archive, sheet_path)
+
+    openpyxl_index = index_images_by_row(ws, header_row, max_row)
+    drawing_index = load_drawing_images(xlsx_path, ws, wb, header_row, max_row)
     cell_index = load_cell_images(xlsx_path, ws, wb)
     merged = merge_images_by_row(openpyxl_index, drawing_index, max_row)
     return merge_images_by_row(merged, cell_index, max_row)
@@ -225,22 +239,40 @@ def count_drawing_load_stats(
     archive: zipfile.ZipFile,
     drawing_path: str,
     drawing_rels: dict[str, str],
-) -> tuple[int, int, int]:
+    max_row: int | None = None,
+) -> tuple[int, int, int, int, int | None, int | None]:
     root = ET.fromstring(archive.read(drawing_path))
     blip_total = 0
     resolved = 0
-    for anchor in _iter_local_name(root, "oneCellAnchor") + _iter_local_name(root, "twoCellAnchor") + _iter_local_name(root, "absoluteAnchor"):
-        for blip_rel_id in _find_blip_rel_ids(anchor):
-            blip_total += 1
-            raw_media_path = drawing_rels.get(blip_rel_id)
-            if raw_media_path and _resolve_media_path(archive, raw_media_path):
-                resolved += 1
+    assigned = 0
+    anchor_rows: list[int] = []
+    for local_name in ("oneCellAnchor", "twoCellAnchor", "absoluteAnchor"):
+        for anchor in _iter_local_name(root, local_name):
+            anchor_info = _parse_drawing_anchor(anchor, local_name)
+            blips = _find_blip_rel_ids(anchor)
+            if anchor_info is not None:
+                anchor_rows.append(anchor_info.from_row)
+            for blip_rel_id in blips:
+                blip_total += 1
+                raw_media_path = drawing_rels.get(blip_rel_id)
+                if raw_media_path and _resolve_media_path(archive, raw_media_path):
+                    resolved += 1
+                    if anchor_info is not None:
+                        for row in get_assigned_rows(
+                            anchor_info.from_row,
+                            anchor_info.to_row,
+                            header_row=1,
+                        ):
+                            if max_row is None or row <= max_row:
+                                assigned += 1
     row_count = len(
         _iter_local_name(root, "oneCellAnchor")
         + _iter_local_name(root, "twoCellAnchor")
         + _iter_local_name(root, "absoluteAnchor")
     )
-    return row_count, blip_total, resolved
+    row_min = min(anchor_rows) if anchor_rows else None
+    row_max = max(anchor_rows) if anchor_rows else None
+    return row_count, blip_total, resolved, assigned, row_min, row_max
 
 
 def _load_from_drawing_xml(

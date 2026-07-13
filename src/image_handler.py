@@ -78,9 +78,10 @@ def get_image_row(image: Image) -> int | None:
     return row_range[0]
 
 
-def index_images_by_row(ws: Worksheet, header_row: int = 1) -> dict[int, list[Image]]:
+def index_images_by_row(ws: Worksheet, header_row: int = 1, max_row: int | None = None) -> dict[int, list[Image]]:
     images_by_row: dict[int, list[Image]] = {}
-    max_row = ws.max_row or 1
+    if max_row is None:
+        max_row = ws.max_row or 1
 
     for image in getattr(ws, "_images", []):
         _read_image_bytes(image)

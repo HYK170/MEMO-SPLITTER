@@ -15,7 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 REL_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 REL_EMBED_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 DISPIMG_PATTERN = re.compile(r'DISPIMG\s*\(\s*"([^"]+)"', re.IGNORECASE)
-DIAGNOSE_VERSION = "2026-07-13-d"
+DIAGNOSE_VERSION = "2026-07-13-e"
 
 
 def load_cell_images(xlsx_path: Path, ws: Worksheet, wb=None) -> dict[int, list[Image]]:
@@ -47,6 +47,11 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
 
         sheet_path = _resolve_sheet_path(archive, ws, wb)
         lines.append(f"시트 XML: {sheet_path or '찾을 수 없음'}")
+
+        from src.sheet_path import get_effective_max_row
+
+        xml_max_row = get_effective_max_row(ws, archive, sheet_path) if sheet_path else (ws.max_row or 1)
+        lines.append(f"openpyxl max_row: {ws.max_row or 1} / sheet XML max_row: {xml_max_row}")
 
         if sheet_path:
             from src.sheet_path import list_sheet_relationships
@@ -99,14 +104,42 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
             anchor_count = 0
             blip_count = 0
             resolved_count = 0
+            assigned_at_openpyxl_max = 0
+            assigned_at_xml_max = 0
+            anchor_row_min: int | None = None
+            anchor_row_max: int | None = None
             for drawing_path in drawing_paths:
                 drawing_rels = _get_rels_map(archive, drawing_path)
-                rows, blips, resolved = count_drawing_load_stats(archive, drawing_path, drawing_rels)
+                rows, blips, resolved, assigned, row_min, row_max = count_drawing_load_stats(
+                    archive,
+                    drawing_path,
+                    drawing_rels,
+                    max_row=ws.max_row or 1,
+                )
                 anchor_count += rows
                 blip_count += blips
                 resolved_count += resolved
+                assigned_at_openpyxl_max += assigned
+                _, _, _, assigned_xml, _, _ = count_drawing_load_stats(
+                    archive,
+                    drawing_path,
+                    drawing_rels,
+                    max_row=xml_max_row,
+                )
+                assigned_at_xml_max += assigned_xml
+                if row_min is not None:
+                    anchor_row_min = row_min if anchor_row_min is None else min(anchor_row_min, row_min)
+                if row_max is not None:
+                    anchor_row_max = row_max if anchor_row_max is None else max(anchor_row_max, row_max)
             lines.append(
-                f"drawing 로드 가능: anchor {anchor_count}개, blip {blip_count}개, media 해석 {resolved_count}개"
+                f"drawing 로드 가능: anchor {anchor_count}개, blip {blip_count}개, "
+                f"media 해석 {resolved_count}개"
+            )
+            if anchor_row_min is not None and anchor_row_max is not None:
+                lines.append(f"drawing anchor 행 범위: {anchor_row_min}~{anchor_row_max}")
+            lines.append(
+                f"행 배정 가능: openpyxl max_row({ws.max_row or 1})={assigned_at_openpyxl_max}개 / "
+                f"sheet XML max_row({xml_max_row})={assigned_at_xml_max}개"
             )
 
         openpyxl_images = getattr(ws, "_images", [])

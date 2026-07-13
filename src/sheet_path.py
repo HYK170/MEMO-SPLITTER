@@ -231,6 +231,43 @@ def _drawing_paths_by_sheet_index(
     return [candidate for candidate in candidates if candidate in names]
 
 
+def get_effective_max_row(
+    ws: Worksheet,
+    archive: zipfile.ZipFile | None = None,
+    sheet_path: str | None = None,
+) -> int:
+    max_row = ws.max_row or 1
+    if not archive or not sheet_path:
+        return max_row
+
+    normalized = _normalize_zip_path(sheet_path)
+    if normalized not in archive.namelist():
+        return max_row
+
+    root = ET.fromstring(archive.read(normalized))
+    for element in root.iter():
+        local = element.tag.rsplit("}", 1)[-1]
+        if local == "dimension":
+            ref = element.attrib.get("ref", "")
+            if ref:
+                end_ref = ref.split(":")[-1]
+                digits = "".join(ch for ch in end_ref if ch.isdigit())
+                if digits:
+                    max_row = max(max_row, int(digits))
+        elif local == "row":
+            row_num = element.attrib.get("r")
+            if row_num and str(row_num).isdigit():
+                max_row = max(max_row, int(row_num))
+        elif local == "c":
+            cell_ref = element.attrib.get("r")
+            if cell_ref:
+                digits = "".join(ch for ch in cell_ref if ch.isdigit())
+                if digits:
+                    max_row = max(max_row, int(digits))
+
+    return max_row
+
+
 def _collapse_posix(path: str) -> str:
     parts: list[str] = []
     for part in path.replace("\\", "/").split("/"):
