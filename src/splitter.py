@@ -72,8 +72,18 @@ def split_workbook(
         _ensure_required_columns(column_map)
 
         images_by_row = build_images_by_row(config.input_path, ws, wb, config.header_row)
+        from src.image_handler import index_images_by_row
+        from src.drawing_image_loader import load_drawing_images
+        from src.cell_image_loader import load_cell_images
+
+        openpyxl_count = sum(len(v) for v in index_images_by_row(ws, config.header_row).values())
+        drawing_count = sum(len(v) for v in load_drawing_images(config.input_path, ws, wb, config.header_row).values())
+        cell_count = sum(len(v) for v in load_cell_images(config.input_path, ws, wb).values())
         image_count = sum(len(items) for items in images_by_row.values())
-        log(f"이미지 {image_count}개 인식")
+        log(
+            f"이미지 {image_count}개 인식 "
+            f"(openpyxl {openpyxl_count}, drawing {drawing_count}, cell {cell_count})"
+        )
         if image_count == 0:
             from src.cell_image_loader import diagnose_image_sources
 

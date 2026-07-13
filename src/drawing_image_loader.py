@@ -147,15 +147,53 @@ def _image_dedupe_key(image: Image) -> str:
     return f"{digest}:{row_range}"
 
 
+def _resolve_media_path(archive: zipfile.ZipFile, media_path: str) -> str | None:
+    names = set(archive.namelist())
+    candidates = [
+        media_path,
+        _normalize_zip_path(media_path),
+        _collapse_posix(media_path.replace("\\", "/")),
+    ]
+    for candidate in candidates:
+        normalized = _normalize_zip_path(candidate)
+        if normalized in names:
+            return normalized
+        if not normalized.startswith("xl/"):
+            prefixed = f"xl/{normalized.lstrip('/')}"
+            if prefixed in names:
+                return prefixed
+
+    basename = PurePosixPath(media_path.replace("\\", "/")).name
+    if not basename:
+        return None
+    for name in names:
+        if name.startswith("xl/media/") and PurePosixPath(name).name == basename:
+            return name
+    return None
+
+
+def _collapse_posix(path: str) -> str:
+    parts: list[str] = []
+    for part in path.replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
 def _normalize_zip_path(target: str) -> str:
-    cleaned = target.replace("\\", "/").lstrip("/")
+    cleaned = _collapse_posix(target.replace("\\", "/").lstrip("/"))
     if cleaned.startswith("xl/"):
         return cleaned
     if cleaned.startswith("drawings/"):
         return f"xl/{cleaned}"
     if cleaned.startswith("media/"):
         return f"xl/{cleaned}"
-    return cleaned.replace("../", "")
+    return cleaned
 
 
 def _resolve_target(base_path: str, target: str) -> str:
@@ -183,6 +221,28 @@ def _get_rels_map(archive: zipfile.ZipFile, resource_path: str) -> dict[str, str
     return get_rels_map(archive, resource_path)
 
 
+def count_drawing_load_stats(
+    archive: zipfile.ZipFile,
+    drawing_path: str,
+    drawing_rels: dict[str, str],
+) -> tuple[int, int, int]:
+    root = ET.fromstring(archive.read(drawing_path))
+    blip_total = 0
+    resolved = 0
+    for anchor in _iter_local_name(root, "oneCellAnchor") + _iter_local_name(root, "twoCellAnchor") + _iter_local_name(root, "absoluteAnchor"):
+        for blip_rel_id in _find_blip_rel_ids(anchor):
+            blip_total += 1
+            raw_media_path = drawing_rels.get(blip_rel_id)
+            if raw_media_path and _resolve_media_path(archive, raw_media_path):
+                resolved += 1
+    row_count = len(
+        _iter_local_name(root, "oneCellAnchor")
+        + _iter_local_name(root, "twoCellAnchor")
+        + _iter_local_name(root, "absoluteAnchor")
+    )
+    return row_count, blip_total, resolved
+
+
 def _load_from_drawing_xml(
     archive: zipfile.ZipFile,
     drawing_path: str,
@@ -202,8 +262,11 @@ def _load_from_drawing_xml(
         if anchor_info is None:
             continue
         for blip_rel_id in _find_blip_rel_ids(anchor):
-            media_path = drawing_rels.get(blip_rel_id)
-            if not media_path or media_path not in archive.namelist():
+            raw_media_path = drawing_rels.get(blip_rel_id)
+            if not raw_media_path:
+                continue
+            media_path = _resolve_media_path(archive, raw_media_path)
+            if not media_path:
                 continue
             media_data = archive.read(media_path)
             _assign_image_bytes_to_rows(
@@ -389,10 +452,13 @@ def _load_from_vml(
         if not rel_id:
             continue
         media_path = vml_rels.get(rel_id)
-        if not media_path or media_path not in archive.namelist():
+        if not media_path:
+            continue
+        resolved_media = _resolve_media_path(archive, media_path)
+        if not resolved_media:
             continue
 
-        media_data = archive.read(media_path)
+        media_data = archive.read(resolved_media)
         anchor_info = _parse_vml_anchor(shape)
         if anchor_info is None:
             continue

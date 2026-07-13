@@ -231,23 +231,37 @@ def _drawing_paths_by_sheet_index(
     return [candidate for candidate in candidates if candidate in names]
 
 
+def _collapse_posix(path: str) -> str:
+    parts: list[str] = []
+    for part in path.replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
 def _normalize_zip_path(path: str) -> str:
-    cleaned = path.replace("\\", "/").lstrip("/")
+    cleaned = _collapse_posix(path.replace("\\", "/").lstrip("/"))
     if cleaned.startswith("xl/"):
         return cleaned
     if cleaned.startswith("worksheets/"):
         return f"xl/{cleaned}"
     if cleaned.startswith("drawings/") or cleaned.startswith("media/"):
         return f"xl/{cleaned}"
-    return cleaned.replace("../", "")
+    return cleaned
 
 
 def _resolve_target(base_path: str, target: str) -> str:
-    normalized = _normalize_zip_path(target)
-    if normalized.startswith("xl/"):
-        return normalized
-    base = PurePosixPath(_normalize_zip_path(base_path)).parent
-    joined = (base / target.replace("\\", "/").lstrip("/")).as_posix()
+    normalized_target = _normalize_zip_path(target)
+    if normalized_target.startswith("xl/"):
+        return normalized_target
+    base = _normalize_zip_path(base_path)
+    base_dir = PurePosixPath(base).parent
+    joined = _collapse_posix(str(base_dir / target.replace("\\", "/").lstrip("/")))
     return _normalize_zip_path(joined)
 
 

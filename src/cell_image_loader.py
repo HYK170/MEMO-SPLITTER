@@ -15,7 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 REL_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 REL_EMBED_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 DISPIMG_PATTERN = re.compile(r'DISPIMG\s*\(\s*"([^"]+)"', re.IGNORECASE)
-DIAGNOSE_VERSION = "2026-07-13-c"
+DIAGNOSE_VERSION = "2026-07-13-d"
 
 
 def load_cell_images(xlsx_path: Path, ws: Worksheet, wb=None) -> dict[int, list[Image]]:
@@ -94,15 +94,20 @@ def diagnose_image_sources(xlsx_path: Path, ws: Worksheet, wb=None) -> list[str]
         lines.append(f"richData(vm) 셀: {rich_rows}개")
 
         if sheet_path and drawing_paths:
+            from src.drawing_image_loader import count_drawing_load_stats
+
             anchor_count = 0
             blip_count = 0
+            resolved_count = 0
             for drawing_path in drawing_paths:
-                root = ET.fromstring(archive.read(drawing_path))
-                anchor_count += len(_iter_local_name(root, "oneCellAnchor"))
-                anchor_count += len(_iter_local_name(root, "twoCellAnchor"))
-                anchor_count += len(_iter_local_name(root, "absoluteAnchor"))
-                blip_count += len(_iter_local_name(root, "blip"))
-            lines.append(f"drawing anchor: {anchor_count}개, blip: {blip_count}개")
+                drawing_rels = _get_rels_map(archive, drawing_path)
+                rows, blips, resolved = count_drawing_load_stats(archive, drawing_path, drawing_rels)
+                anchor_count += rows
+                blip_count += blips
+                resolved_count += resolved
+            lines.append(
+                f"drawing 로드 가능: anchor {anchor_count}개, blip {blip_count}개, media 해석 {resolved_count}개"
+            )
 
         openpyxl_images = getattr(ws, "_images", [])
         lines.append(f"openpyxl _images: {len(openpyxl_images)}개")
