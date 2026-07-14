@@ -34,12 +34,12 @@ def test_parse_saved_file_names() -> None:
     assert paths == ["a/photo.jpg", "b/note.txt", "c/doc.pdf"]
 
 
-def create_sample_workbook(path: Path) -> None:
+def create_sample_workbook(path: Path, attach_header: str = "첨부 파일") -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
 
-    headers = ["App", "본문", "저장된 파일 이름", "첨부 파일"]
+    headers = ["App", "본문", "저장된 파일 이름", attach_header]
     for col, header in enumerate(headers, start=1):
         ws.cell(row=1, column=col, value=header)
 
@@ -56,6 +56,19 @@ def create_sample_workbook(path: Path) -> None:
 
     wb.save(path)
     wb.close()
+
+
+def run_split(input_path: Path, output_root: Path, multimedia: Path) -> object:
+    return split_workbook(
+        SplitConfig(
+            input_path=input_path,
+            output_root=output_root,
+            multimedia_root=multimedia,
+            sheet_name="Sheet1",
+            header_row=1,
+        ),
+        on_log=print,
+    )
 
 
 def main() -> None:
@@ -75,16 +88,7 @@ def main() -> None:
 
         create_sample_workbook(input_path)
 
-        result = split_workbook(
-            SplitConfig(
-                input_path=input_path,
-                output_root=output_root,
-                multimedia_root=multimedia,
-                sheet_name="Sheet1",
-                header_row=1,
-            ),
-            on_log=print,
-        )
+        result = run_split(input_path, output_root, multimedia)
 
         print("RESULT", result)
         assert result.folders_created == 3
@@ -111,6 +115,31 @@ def main() -> None:
 
         for folder in sorted(output_root.iterdir()):
             print("FOLDER", folder.name, [p.name for p in folder.iterdir()])
+
+    # NBSP / 공백 없는 헤더도 매칭되어야 함
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        input_path = root / "memo.xlsx"
+        output_root = root / "output"
+        multimedia = root / "Multimedia"
+        output_root.mkdir()
+        (multimedia / "images").mkdir(parents=True)
+        (multimedia / "images" / "shot.png").write_bytes(TINY_PNG)
+        create_sample_workbook(input_path, attach_header="첨부\u00a0파일")
+        result = run_split(input_path, output_root, multimedia)
+        assert result.images_embedded == 2, result
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        input_path = root / "memo.xlsx"
+        output_root = root / "output"
+        multimedia = root / "Multimedia"
+        output_root.mkdir()
+        (multimedia / "images").mkdir(parents=True)
+        (multimedia / "images" / "shot.png").write_bytes(TINY_PNG)
+        create_sample_workbook(input_path, attach_header="첨부파일")
+        result = run_split(input_path, output_root, multimedia)
+        assert result.images_embedded == 2, result
 
     print("ALL TESTS PASSED")
 

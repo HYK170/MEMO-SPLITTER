@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -17,6 +18,7 @@ ProgressCallback = Callable[[int, int], None]
 
 REQUIRED_COLUMNS = ("App", "본문", SAVED_NAME_COLUMN)
 ATTACH_COLUMN = "첨부 파일"
+_HEADER_WHITESPACE = re.compile(r"\s+", re.UNICODE)
 
 
 @dataclass
@@ -73,7 +75,15 @@ def split_workbook(
 
         column_map = _build_column_map(ws, config.header_row)
         _ensure_required_columns(column_map)
-        attach_col = column_map.get(ATTACH_COLUMN)
+        attach_col = _find_column(column_map, ATTACH_COLUMN)
+        if attach_col is None:
+            headers = ", ".join(column_map.keys()) or "(없음)"
+            log(
+                f"경고: '{ATTACH_COLUMN}' 열을 찾지 못했습니다. "
+                f"이미지 임베드를 건너뜁니다. 현재 헤더: {headers}"
+            )
+        else:
+            log(f"이미지 임베드 대상 열: '{ATTACH_COLUMN}' (열 {attach_col}), 행 2")
 
         base_name = config.input_path.stem
         min_col = ws.min_column or 1
@@ -125,8 +135,9 @@ def split_workbook(
                 out_wb = create_split_workbook(ws, config.header_row, data_row, config.sheet_name)
                 out_ws = out_wb.active
                 embedded = 0
+                embed_failures: list[str] = []
                 if attach_col and copy_result.image_paths:
-                    embedded = embed_images_in_column(
+                    embedded, embed_failures = embed_images_in_column(
                         out_ws,
                         copy_result.image_paths,
                         attach_col,
@@ -146,7 +157,13 @@ def split_workbook(
             for name in copy_result.copied:
                 log(f"  첨부 복사: {name}")
             if embedded:
-                log(f"  이미지 임베드: {embedded}개 -> {ATTACH_COLUMN}")
+                log(f"  이미지 임베드: {embedded}개 -> {ATTACH_COLUMN} 열{attach_col}/행2")
+            elif copy_result.image_paths and attach_col is None:
+                log(f"  이미지 임베드 스킵: '{ATTACH_COLUMN}' 열 없음")
+            elif copy_result.copied and not copy_result.image_paths:
+                log("  이미지 임베드 스킵: 복사된 첨부 중 이미지 확장자 없음")
+            for failure in embed_failures:
+                log(f"  이미지 임베드 실패: {failure}")
             for skipped in copy_result.skipped:
                 log(f"  첨부 스킵: {skipped}")
 
@@ -159,17 +176,39 @@ def split_workbook(
         gc.collect()
 
 
+def _normalize_header(value: object) -> str:
+    """헤더 문자열의 공백(NBSP 포함)을 정규화한다."""
+    return _HEADER_WHITESPACE.sub(" ", str(value).strip())
+
+
 def _build_column_map(ws, header_row: int) -> dict[str, int]:
     column_map: dict[str, int] = {}
     for col in range(ws.min_column or 1, (ws.max_column or 1) + 1):
         value = ws.cell(row=header_row, column=col).value
         if value is None:
             continue
-        column_map[str(value).strip()] = col
+        column_map[_normalize_header(value)] = col
     return column_map
 
 
+def _find_column(column_map: dict[str, int], name: str) -> int | None:
+    """정확한 이름 또는 공백 제거 후 이름으로 열을 찾는다."""
+    normalized = _normalize_header(name)
+    if normalized in column_map:
+        return column_map[normalized]
+    compact = normalized.replace(" ", "")
+    for key, col in column_map.items():
+        if key.replace(" ", "") == compact:
+            return col
+    return None
+
+
 def _ensure_required_columns(column_map: dict[str, int]) -> None:
-    missing = [name for name in REQUIRED_COLUMNS if name not in column_map]
+    missing = [name for name in REQUIRED_COLUMNS if _find_column(column_map, name) is None]
     if missing:
         raise ValueError(f"필수 컬럼이 없습니다: {', '.join(missing)}")
+    # 필수 컬럼도 정규화/공백 제거 매칭으로 통일된 키를 쓰도록 보정
+    for name in REQUIRED_COLUMNS:
+        col = _find_column(column_map, name)
+        if col is not None:
+            column_map[name] = col
