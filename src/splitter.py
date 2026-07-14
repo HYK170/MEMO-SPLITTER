@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -9,7 +10,7 @@ from typing import Callable
 from openpyxl import load_workbook
 
 from src.filename_builder import build_row_folder_name, build_xlsx_filename
-from src.image_embedder import embed_images_in_column
+from src.image_embedder import embed_images_in_column, ensure_pillow
 from src.multimedia_copier import SAVED_NAME_COLUMN, copy_multimedia_for_row
 from src.sheet_copier import create_split_workbook, is_row_empty
 
@@ -64,6 +65,14 @@ def split_workbook(
         if on_log:
             on_log(message)
 
+    log(f"Python: {sys.executable}")
+    try:
+        pillow_version = ensure_pillow()
+        log(f"Pillow: {pillow_version}")
+    except RuntimeError as exc:
+        log(f"경고: {exc}")
+        pillow_version = None
+
     wb = load_workbook(config.input_path, data_only=False)
     try:
         if config.sheet_name not in wb.sheetnames:
@@ -82,6 +91,8 @@ def split_workbook(
                 f"경고: '{ATTACH_COLUMN}' 열을 찾지 못했습니다. "
                 f"이미지 임베드를 건너뜁니다. 현재 헤더: {headers}"
             )
+        elif pillow_version is None:
+            log(f"경고: Pillow 없음 — '{ATTACH_COLUMN}' 열 이미지 임베드를 건너뜁니다.")
         else:
             log(f"이미지 임베드 대상 열: '{ATTACH_COLUMN}' (열 {attach_col}), 행 2")
 
@@ -136,7 +147,7 @@ def split_workbook(
                 out_ws = out_wb.active
                 embedded = 0
                 embed_failures: list[str] = []
-                if attach_col and copy_result.image_paths:
+                if attach_col and pillow_version and copy_result.image_paths:
                     embedded, embed_failures = embed_images_in_column(
                         out_ws,
                         copy_result.image_paths,
@@ -160,6 +171,8 @@ def split_workbook(
                 log(f"  이미지 임베드: {embedded}개 -> {ATTACH_COLUMN} 열{attach_col}/행2")
             elif copy_result.image_paths and attach_col is None:
                 log(f"  이미지 임베드 스킵: '{ATTACH_COLUMN}' 열 없음")
+            elif copy_result.image_paths and pillow_version is None:
+                log("  이미지 임베드 스킵: Pillow 미설치")
             elif copy_result.copied and not copy_result.image_paths:
                 log("  이미지 임베드 스킵: 복사된 첨부 중 이미지 확장자 없음")
             for failure in embed_failures:
