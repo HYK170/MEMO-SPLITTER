@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from openpyxl.drawing.image import Image
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.units import (
     EMU_to_pixels,
     cm_to_EMU,
@@ -69,6 +71,50 @@ def _render_box_pixels() -> tuple[int, int]:
         max(1, int(round(MAX_WIDTH_CM * RENDER_DPI / 2.54))),
         max(1, int(round(MAX_HEIGHT_CM * RENDER_DPI / 2.54))),
     )
+
+
+def _text_display_units(text: str) -> float:
+    """엑셀 열 너비 단위에 가깝게 문자 폭을 계산한다(한글≈2)."""
+    width = 0.0
+    for ch in text:
+        width += 2.0 if ord(ch) > 0x2E80 else 1.0
+    return width
+
+
+def _estimate_wrapped_row_height(ws: Worksheet, row: int) -> float:
+    """자동 줄바꿈이 필요할 때 대략적인 행 높이(pt)."""
+    max_height = 0.0
+    min_col = ws.min_column or 1
+    max_col = ws.max_column or 1
+    for col in range(min_col, max_col + 1):
+        cell = ws.cell(row=row, column=col)
+        if cell.value in (None, ""):
+            continue
+
+        font_size = 11.0
+        if cell.font is not None and cell.font.size:
+            font_size = float(cell.font.size)
+
+        wrap = True
+        if cell.alignment is not None and cell.alignment.wrap_text is False:
+            wrap = False
+
+        text = str(cell.value).replace("\r\n", "\n").replace("\r", "\n")
+        if not wrap:
+            lines = text.count("\n") + 1
+        else:
+            letter = get_column_letter(col)
+            dim = ws.column_dimensions.get(letter)
+            col_width = float(dim.width) if dim is not None and dim.width else 8.43
+            chars_per_line = max(1.0, col_width)
+            lines = 0
+            for part in text.split("\n"):
+                units = _text_display_units(part) if part else 1.0
+                lines += max(1, int(math.ceil(units / chars_per_line)))
+
+        max_height = max(max_height, lines * font_size * 1.3)
+
+    return min(409.0, max_height)
 
 
 def _compose_boxed_png(path: Path) -> bytes:
@@ -152,11 +198,15 @@ def embed_images_in_column(
 
     if added:
         total_height_px = added * display_h + (added - 1) * gap_px
-        needed = pixels_to_points(total_height_px + _cm_to_pixels(ROW_PADDING_CM))
-        needed = min(409.0, max(15.0, float(needed)))
+        image_needed = pixels_to_points(total_height_px + _cm_to_pixels(ROW_PADDING_CM))
+        image_needed = min(409.0, max(15.0, float(image_needed)))
         current = ws.row_dimensions[row].height
-        # 필요할 때만 늘림. 기존(원본에서 복사된) 높이가 더 크면 유지.
-        if current is None or current < needed:
-            ws.row_dimensions[row].height = needed
+        wrap_needed = _estimate_wrapped_row_height(ws, row)
+        # 이미지 / 자동줄바꿈 / 기존 명시 높이 중 최대값. 절대 낮추지 않음.
+        target = max(image_needed, wrap_needed)
+        if current is not None:
+            target = max(target, float(current))
+        if current is None or float(current) < target:
+            ws.row_dimensions[row].height = target
 
     return added, failures
