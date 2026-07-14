@@ -23,7 +23,6 @@ class MemoSplitterApp(ctk.CTk):
 
         self.input_var = tk.StringVar()
         self.multimedia_var = tk.StringVar()
-        self.output_var = tk.StringVar()
         self.sheet_var = tk.StringVar()
         self.header_row_var = tk.IntVar(value=1)
         self.progress_var = tk.DoubleVar(value=0.0)
@@ -38,7 +37,7 @@ class MemoSplitterApp(ctk.CTk):
 
         subtitle = ctk.CTkLabel(
             self,
-            text="XLSX를 HEADER + 1행 단위로 분할하고, Multimedia 첨부를 함께 복사합니다.",
+            text="XLSX를 HEADER + 1행 단위로 분할합니다. 결과는 INPUT과 같은 경로의 Memo_{timestamp} 폴더에 저장됩니다.",
             font=ctk.CTkFont(size=13),
         )
         subtitle.pack(anchor="w", padx=16, pady=(0, 12))
@@ -51,15 +50,14 @@ class MemoSplitterApp(ctk.CTk):
         self._add_path_row(
             form, 1, "Multimedia 폴더", self.multimedia_var, self._browse_multimedia, is_file=False
         )
-        self._add_path_row(form, 2, "OUTPUT 폴더", self.output_var, self._browse_output, is_file=False)
 
-        ctk.CTkLabel(form, text="SHEET").grid(row=3, column=0, sticky="w", padx=12, pady=10)
+        ctk.CTkLabel(form, text="SHEET").grid(row=2, column=0, sticky="w", padx=12, pady=10)
         self.sheet_combo = ctk.CTkComboBox(form, variable=self.sheet_var, values=[""])
-        self.sheet_combo.grid(row=3, column=1, sticky="ew", padx=12, pady=10)
+        self.sheet_combo.grid(row=2, column=1, sticky="ew", padx=12, pady=10)
 
-        ctk.CTkLabel(form, text="HEADER ROW").grid(row=4, column=0, sticky="w", padx=12, pady=10)
+        ctk.CTkLabel(form, text="HEADER ROW").grid(row=3, column=0, sticky="w", padx=12, pady=10)
         self.header_spin = ctk.CTkEntry(form, textvariable=self.header_row_var, width=80)
-        self.header_spin.grid(row=4, column=1, sticky="w", padx=12, pady=10)
+        self.header_spin.grid(row=3, column=1, sticky="w", padx=12, pady=10)
 
         self.run_button = ctk.CTkButton(self, text="SPLIT 실행", command=self._start_split)
         self.run_button.pack(padx=16, pady=8, anchor="w")
@@ -112,11 +110,6 @@ class MemoSplitterApp(ctk.CTk):
         if path:
             self.multimedia_var.set(path)
 
-    def _browse_output(self) -> None:
-        path = filedialog.askdirectory(title="OUTPUT 폴더 선택")
-        if path:
-            self.output_var.set(path)
-
     def _load_sheet_names(self, xlsx_path: Path) -> None:
         try:
             sheets = list_sheet_names(xlsx_path)
@@ -142,7 +135,6 @@ class MemoSplitterApp(ctk.CTk):
 
         config = SplitConfig(
             input_path=Path(self.input_var.get().strip()),
-            output_root=Path(self.output_var.get().strip()),
             multimedia_root=Path(self.multimedia_var.get().strip()),
             sheet_name=self.sheet_var.get().strip(),
             header_row=header_row,
@@ -188,12 +180,14 @@ class MemoSplitterApp(ctk.CTk):
     def _on_split_complete(self, result) -> None:
         self.run_button.configure(state="normal")
         self.progress_var.set(1.0)
+        output_info = f", 출력 {result.output_root}" if result.output_root else ""
         summary = (
             f"완료: 폴더 {result.folders_created}개, "
             f"첨부 {result.attachments_copied}개, "
             f"이미지 임베드 {result.images_embedded}개, "
             f"빈 행 스킵 {result.rows_skipped}개, "
             f"첨부 스킵 {len(result.attachment_skips)}건"
+            f"{output_info}"
         )
         self.status_var.set(summary)
         self._append_log(summary)

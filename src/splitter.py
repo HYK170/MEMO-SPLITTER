@@ -4,6 +4,7 @@ import gc
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -30,15 +31,30 @@ class SplitResult:
     rows_skipped: int = 0
     attachment_skips: list[str] = field(default_factory=list)
     row_errors: list[str] = field(default_factory=list)
+    output_root: Path | None = None
 
 
 @dataclass
 class SplitConfig:
     input_path: Path
-    output_root: Path
     multimedia_root: Path
     sheet_name: str
     header_row: int
+
+
+def build_memo_output_root(input_path: Path, now: datetime | None = None) -> Path:
+    """INPUT XLSX와 같은 경로에 Memo_{YYYYMMDDHHMMSS} 폴더 경로를 만든다."""
+    parent = input_path.resolve().parent
+    stamp = (now or datetime.now()).strftime("%Y%m%d%H%M%S")
+    candidate = parent / f"Memo_{stamp}"
+    if not candidate.exists():
+        return candidate
+    counter = 2
+    while True:
+        numbered = parent / f"Memo_{stamp}_{counter}"
+        if not numbered.exists():
+            return numbered
+        counter += 1
 
 
 def validate_config(config: SplitConfig) -> None:
@@ -46,8 +62,6 @@ def validate_config(config: SplitConfig) -> None:
         raise FileNotFoundError(f"INPUT XLSX를 찾을 수 없습니다: {config.input_path}")
     if config.input_path.suffix.lower() != ".xlsx":
         raise ValueError("INPUT 파일은 .xlsx 확장자여야 합니다.")
-    if not config.output_root.is_dir():
-        raise FileNotFoundError(f"OUTPUT 폴더를 찾을 수 없습니다: {config.output_root}")
     if not config.multimedia_root.is_dir():
         raise FileNotFoundError(f"Multimedia 폴더를 찾을 수 없습니다: {config.multimedia_root}")
     if config.header_row < 1:
@@ -64,6 +78,10 @@ def split_workbook(
     def log(message: str) -> None:
         if on_log:
             on_log(message)
+
+    output_root = build_memo_output_root(config.input_path)
+    output_root.mkdir(parents=True, exist_ok=False)
+    log(f"OUTPUT: {output_root}")
 
     log(f"Python: {sys.executable}")
     try:
@@ -107,7 +125,7 @@ def split_workbook(
             for row in range(first_data_row, last_data_row + 1)
             if not is_row_empty(ws, row, min_col, max_col)
         ]
-        result = SplitResult()
+        result = SplitResult(output_root=output_root)
         result.rows_skipped = (last_data_row - first_data_row + 1) - len(data_rows)
         total = len(data_rows)
         row_index = 0
@@ -118,7 +136,7 @@ def split_workbook(
                 on_progress(row_index, total)
 
             folder_name = build_row_folder_name(base_name, row_index)
-            row_folder = config.output_root / folder_name
+            row_folder = output_root / folder_name
 
             try:
                 row_folder.mkdir(parents=True, exist_ok=True)

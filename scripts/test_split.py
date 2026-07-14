@@ -16,7 +16,7 @@ from PIL import Image as PILImage
 
 from src.filename_builder import parse_title
 from src.multimedia_copier import parse_saved_file_names
-from src.splitter import SplitConfig, split_workbook
+from src.splitter import SplitConfig, build_memo_output_root, split_workbook
 
 
 def _tiny_png_bytes() -> bytes:
@@ -38,6 +38,20 @@ def test_parse_title_first_line_only() -> None:
 def test_parse_saved_file_names() -> None:
     paths = parse_saved_file_names("a/photo.jpg\nb/note.txt\n\n c/doc.pdf ")
     assert paths == ["a/photo.jpg", "b/note.txt", "c/doc.pdf"]
+
+
+def test_build_memo_output_root() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        input_path = root / "memo.xlsx"
+        input_path.write_bytes(b"")
+        from datetime import datetime
+
+        first = build_memo_output_root(input_path, now=datetime(2026, 7, 14, 13, 24, 0))
+        assert first.name == "Memo_20260714132400"
+        first.mkdir()
+        second = build_memo_output_root(input_path, now=datetime(2026, 7, 14, 13, 24, 0))
+        assert second.name == "Memo_20260714132400_2"
 
 
 def create_sample_workbook(path: Path, attach_header: str = "첨부 파일") -> None:
@@ -64,11 +78,10 @@ def create_sample_workbook(path: Path, attach_header: str = "첨부 파일") -> 
     wb.close()
 
 
-def run_split(input_path: Path, output_root: Path, multimedia: Path) -> object:
+def run_split(input_path: Path, multimedia: Path) -> object:
     return split_workbook(
         SplitConfig(
             input_path=input_path,
-            output_root=output_root,
             multimedia_root=multimedia,
             sheet_name="Sheet1",
             header_row=1,
@@ -80,13 +93,12 @@ def run_split(input_path: Path, output_root: Path, multimedia: Path) -> object:
 def main() -> None:
     test_parse_title_first_line_only()
     test_parse_saved_file_names()
+    test_build_memo_output_root()
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         input_path = root / "memo.xlsx"
-        output_root = root / "output"
         multimedia = root / "Multimedia"
-        output_root.mkdir()
         (multimedia / "images").mkdir(parents=True)
         (multimedia / "docs").mkdir(parents=True)
         (multimedia / "images" / "shot.png").write_bytes(TINY_PNG)
@@ -94,16 +106,19 @@ def main() -> None:
 
         create_sample_workbook(input_path)
 
-        result = run_split(input_path, output_root, multimedia)
+        result = run_split(input_path, multimedia)
 
         print("RESULT", result)
+        assert result.output_root is not None
+        assert result.output_root.parent == root
+        assert result.output_root.name.startswith("Memo_")
         assert result.folders_created == 3
         assert result.attachments_copied == 3
         assert result.images_embedded == 2
         assert not result.attachment_skips
         assert not result.row_errors
 
-        folder1 = output_root / "memo_001"
+        folder1 = result.output_root / "memo_001"
         assert (folder1 / "shot.png").is_file()
         assert (folder1 / "memo.txt").is_file()
 
@@ -119,32 +134,28 @@ def main() -> None:
         with zipfile.ZipFile(first_xlsx) as z:
             assert any(n.startswith("xl/media/") for n in z.namelist())
 
-        for folder in sorted(output_root.iterdir()):
+        for folder in sorted(result.output_root.iterdir()):
             print("FOLDER", folder.name, [p.name for p in folder.iterdir()])
 
     # NBSP / 공백 없는 헤더도 매칭되어야 함
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         input_path = root / "memo.xlsx"
-        output_root = root / "output"
         multimedia = root / "Multimedia"
-        output_root.mkdir()
         (multimedia / "images").mkdir(parents=True)
         (multimedia / "images" / "shot.png").write_bytes(TINY_PNG)
         create_sample_workbook(input_path, attach_header="첨부\u00a0파일")
-        result = run_split(input_path, output_root, multimedia)
+        result = run_split(input_path, multimedia)
         assert result.images_embedded == 2, result
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         input_path = root / "memo.xlsx"
-        output_root = root / "output"
         multimedia = root / "Multimedia"
-        output_root.mkdir()
         (multimedia / "images").mkdir(parents=True)
         (multimedia / "images" / "shot.png").write_bytes(TINY_PNG)
         create_sample_workbook(input_path, attach_header="첨부파일")
-        result = run_split(input_path, output_root, multimedia)
+        result = run_split(input_path, multimedia)
         assert result.images_embedded == 2, result
 
     print("ALL TESTS PASSED")
