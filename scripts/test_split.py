@@ -39,7 +39,7 @@ def create_sample_workbook(path: Path) -> None:
     ws = wb.active
     ws.title = "Sheet1"
 
-    headers = ["App", "본문", "저장된 파일 이름", "첨부파일"]
+    headers = ["App", "본문", "저장된 파일 이름", "첨부 파일"]
     for col, header in enumerate(headers, start=1):
         ws.cell(row=1, column=col, value=header)
 

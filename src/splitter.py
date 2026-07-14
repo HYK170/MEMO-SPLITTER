@@ -16,7 +16,7 @@ LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]
 
 REQUIRED_COLUMNS = ("App", "본문", SAVED_NAME_COLUMN)
-ATTACH_COLUMN = "첨부파일"
+ATTACH_COLUMN = "첨부 파일"
 
 
 @dataclass
