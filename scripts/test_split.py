@@ -12,16 +12,22 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from openpyxl import Workbook, load_workbook
+from PIL import Image as PILImage
 
 from src.filename_builder import parse_title
 from src.multimedia_copier import parse_saved_file_names
 from src.splitter import SplitConfig, split_workbook
 
-TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc``\x00\x00"
-    b"\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
-)
+
+def _tiny_png_bytes() -> bytes:
+    from io import BytesIO
+
+    buffer = BytesIO()
+    PILImage.new("RGB", (1, 1), (255, 0, 0)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+TINY_PNG = _tiny_png_bytes()
 
 
 def test_parse_title_first_line_only() -> None:

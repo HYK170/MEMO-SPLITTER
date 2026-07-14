@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from io import BytesIO
 from pathlib import Path
 
 from openpyxl.drawing.image import Image
@@ -16,11 +17,13 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from src.sheet_copier import OUTPUT_DATA_ROW
 
-# 표시 최대 박스 (비율 유지, 박스보다 작으면 확대하지 않음)
+# 고정 표시 박스 (이미지 비율 유지, 남는 영역은 검정)
 MAX_WIDTH_CM = 2.54
 MAX_HEIGHT_CM = 2.36
 GAP_CM = 0.1  # 여러 장 세로 쌓을 때 간격
 ROW_PADDING_CM = 0.15  # 행 높이 여유
+# 캔버스 해상도 (표시 cm는 유지, 비트맵만 더 선명하게)
+RENDER_DPI = 150
 
 
 def ensure_pillow() -> str:
@@ -52,14 +55,42 @@ def _cm_to_pixels(cm: float) -> float:
     return float(EMU_to_pixels(cm_to_EMU(cm)))
 
 
-def _fit_display_size(width: float, height: float) -> tuple[int, int]:
-    """최대 박스 안에 비율 유지로 맞춘다. 작은 이미지는 키우지 않는다."""
-    max_w = _cm_to_pixels(MAX_WIDTH_CM)
-    max_h = _cm_to_pixels(MAX_HEIGHT_CM)
-    if width <= 0 or height <= 0:
-        return max(1, int(max_w)), max(1, int(max_h))
-    scale = min(max_w / width, max_h / height, 1.0)
-    return max(1, int(width * scale)), max(1, int(height * scale))
+def _display_box_pixels() -> tuple[int, int]:
+    """엑셀에 표시할 고정 박스 크기(픽셀, openpyxl 기준)."""
+    return (
+        max(1, int(round(_cm_to_pixels(MAX_WIDTH_CM)))),
+        max(1, int(round(_cm_to_pixels(MAX_HEIGHT_CM)))),
+    )
+
+
+def _render_box_pixels() -> tuple[int, int]:
+    """검정 배경 합성용 캔버스 픽셀 크기."""
+    return (
+        max(1, int(round(MAX_WIDTH_CM * RENDER_DPI / 2.54))),
+        max(1, int(round(MAX_HEIGHT_CM * RENDER_DPI / 2.54))),
+    )
+
+
+def _compose_boxed_png(path: Path) -> bytes:
+    """비율 유지로 맞춘 이미지를 고정 박스 중앙에 두고 나머지는 검정으로 채운 PNG."""
+    from PIL import Image as PILImage
+
+    box_w, box_h = _render_box_pixels()
+    with PILImage.open(path) as src:
+        rgba = src.convert("RGBA")
+        # 박스 안에 맞게 축소만 하고, 작은 이미지는 확대하지 않음
+        scale = min(box_w / rgba.width, box_h / rgba.height, 1.0)
+        fitted_w = max(1, int(rgba.width * scale))
+        fitted_h = max(1, int(rgba.height * scale))
+        fitted = rgba.resize((fitted_w, fitted_h), PILImage.Resampling.LANCZOS)
+
+    canvas = PILImage.new("RGB", (box_w, box_h), (0, 0, 0))
+    offset = ((box_w - fitted_w) // 2, (box_h - fitted_h) // 2)
+    canvas.paste(fitted, offset, fitted)
+
+    buffer = BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def embed_images_in_column(
@@ -70,7 +101,8 @@ def embed_images_in_column(
 ) -> tuple[int, list[str]]:
     """이미지 파일을 지정 열 셀에 임베드한다.
 
-    여러 장이면 같은 셀 기준 세로로 쌓고, 2행 높이를 총 높이에 맞춘다.
+    각 이미지는 항상 2.54x2.36cm 박스로 들어가고, 비율 유지 + 검정 레터박스.
+    여러 장이면 세로로 쌓고, 2행 높이는 필요할 때만 늘린다(줄이지 않음).
 
     Returns:
         (성공 개수, 실패 메시지 목록)
@@ -83,23 +115,16 @@ def embed_images_in_column(
     except RuntimeError as exc:
         return 0, [str(exc)]
 
+    display_w, display_h = _display_box_pixels()
+    gap_px = _cm_to_pixels(GAP_CM)
     added = 0
     failures: list[str] = []
-    gap_px = _cm_to_pixels(GAP_CM)
     cursor_y = 0.0
-    total_height_px = 0.0
 
     for path in image_paths:
         try:
-            image = Image(str(path))
-        except Exception as exc:
-            failures.append(f"{path.name}: 열기 실패 ({exc})")
-            continue
-
-        try:
-            width = float(image.width or _cm_to_pixels(MAX_WIDTH_CM))
-            height = float(image.height or _cm_to_pixels(MAX_HEIGHT_CM))
-            display_w, display_h = _fit_display_size(width, height)
+            png_bytes = _compose_boxed_png(path)
+            image = Image(BytesIO(png_bytes))
             image.width = display_w
             image.height = display_h
 
@@ -116,23 +141,21 @@ def embed_images_in_column(
                     int(pixels_to_EMU(display_h)),
                 ),
             )
-
-            data = path.read_bytes()
-            image._cached_bytes = data  # noqa: SLF001
-            image._data = lambda data=data: data  # noqa: SLF001
+            image._cached_bytes = png_bytes  # noqa: SLF001
+            image._data = lambda data=png_bytes: data  # noqa: SLF001
             ws.add_image(image)
 
-            total_height_px = cursor_y + display_h
             cursor_y += display_h + gap_px
             added += 1
         except Exception as exc:
             failures.append(f"{path.name}: 삽입 실패 ({exc})")
 
     if added:
+        total_height_px = added * display_h + (added - 1) * gap_px
         needed = pixels_to_points(total_height_px + _cm_to_pixels(ROW_PADDING_CM))
-        # Excel 행 높이 상한은 409pt
         needed = min(409.0, max(15.0, float(needed)))
         current = ws.row_dimensions[row].height
+        # 필요할 때만 늘림. 기존(원본에서 복사된) 높이가 더 크면 유지.
         if current is None or current < needed:
             ws.row_dimensions[row].height = needed
 
