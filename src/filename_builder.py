@@ -67,18 +67,3 @@ def _dedupe_filename(filename: str, existing_names: set[str]) -> str:
             existing_names.add(candidate)
             return candidate
         counter += 1
-
-
-def unique_dest_path(folder: Path, filename: str) -> Path:
-    dest = folder / filename
-    if not dest.exists():
-        return dest
-
-    stem = dest.stem
-    suffix = dest.suffix
-    counter = 2
-    while True:
-        candidate = folder / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1

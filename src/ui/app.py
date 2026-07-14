@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from src.attachment_copier import list_sheet_names
+from src.sheet_copier import list_sheet_names
 from src.splitter import SplitConfig, split_workbook
 
 
@@ -15,13 +15,14 @@ class MemoSplitterApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("MEMO SPLITTER")
-        self.geometry("760x560")
-        self.minsize(680, 480)
+        self.geometry("780x620")
+        self.minsize(700, 520)
 
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
         self.input_var = tk.StringVar()
+        self.multimedia_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.sheet_var = tk.StringVar()
         self.header_row_var = tk.IntVar(value=1)
@@ -32,14 +33,12 @@ class MemoSplitterApp(ctk.CTk):
         self._build_layout()
 
     def _build_layout(self) -> None:
-        padding = {"padx": 16, "pady": 8}
-
         title = ctk.CTkLabel(self, text="MEMO SPLITTER", font=ctk.CTkFont(size=22, weight="bold"))
         title.pack(anchor="w", padx=16, pady=(16, 4))
 
         subtitle = ctk.CTkLabel(
             self,
-            text="XLSX를 HEADER + 1행 단위로 분할하고, 행별 첨부파일을 함께 복사합니다.",
+            text="XLSX를 HEADER + 1행 단위로 분할하고, Multimedia 첨부를 함께 복사합니다.",
             font=ctk.CTkFont(size=13),
         )
         subtitle.pack(anchor="w", padx=16, pady=(0, 12))
@@ -49,15 +48,18 @@ class MemoSplitterApp(ctk.CTk):
         form.grid_columnconfigure(1, weight=1)
 
         self._add_path_row(form, 0, "INPUT XLSX", self.input_var, self._browse_input, is_file=True)
-        self._add_path_row(form, 1, "OUTPUT 폴더", self.output_var, self._browse_output, is_file=False)
+        self._add_path_row(
+            form, 1, "Multimedia 폴더", self.multimedia_var, self._browse_multimedia, is_file=False
+        )
+        self._add_path_row(form, 2, "OUTPUT 폴더", self.output_var, self._browse_output, is_file=False)
 
-        ctk.CTkLabel(form, text="SHEET").grid(row=2, column=0, sticky="w", padx=12, pady=10)
+        ctk.CTkLabel(form, text="SHEET").grid(row=3, column=0, sticky="w", padx=12, pady=10)
         self.sheet_combo = ctk.CTkComboBox(form, variable=self.sheet_var, values=[""])
-        self.sheet_combo.grid(row=2, column=1, sticky="ew", padx=12, pady=10)
+        self.sheet_combo.grid(row=3, column=1, sticky="ew", padx=12, pady=10)
 
-        ctk.CTkLabel(form, text="HEADER ROW").grid(row=3, column=0, sticky="w", padx=12, pady=10)
+        ctk.CTkLabel(form, text="HEADER ROW").grid(row=4, column=0, sticky="w", padx=12, pady=10)
         self.header_spin = ctk.CTkEntry(form, textvariable=self.header_row_var, width=80)
-        self.header_spin.grid(row=3, column=1, sticky="w", padx=12, pady=10)
+        self.header_spin.grid(row=4, column=1, sticky="w", padx=12, pady=10)
 
         self.run_button = ctk.CTkButton(self, text="SPLIT 실행", command=self._start_split)
         self.run_button.pack(padx=16, pady=8, anchor="w")
@@ -105,6 +107,11 @@ class MemoSplitterApp(ctk.CTk):
         self.input_var.set(path)
         self._load_sheet_names(Path(path))
 
+    def _browse_multimedia(self) -> None:
+        path = filedialog.askdirectory(title="Multimedia 폴더 선택")
+        if path:
+            self.multimedia_var.set(path)
+
     def _browse_output(self) -> None:
         path = filedialog.askdirectory(title="OUTPUT 폴더 선택")
         if path:
@@ -136,6 +143,7 @@ class MemoSplitterApp(ctk.CTk):
         config = SplitConfig(
             input_path=Path(self.input_var.get().strip()),
             output_root=Path(self.output_var.get().strip()),
+            multimedia_root=Path(self.multimedia_var.get().strip()),
             sheet_name=self.sheet_var.get().strip(),
             header_row=header_row,
         )
@@ -183,6 +191,7 @@ class MemoSplitterApp(ctk.CTk):
         summary = (
             f"완료: 폴더 {result.folders_created}개, "
             f"첨부 {result.attachments_copied}개, "
+            f"이미지 임베드 {result.images_embedded}개, "
             f"빈 행 스킵 {result.rows_skipped}개, "
             f"첨부 스킵 {len(result.attachment_skips)}건"
         )

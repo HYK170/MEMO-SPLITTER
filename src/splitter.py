@@ -1,31 +1,29 @@
 from __future__ import annotations
 
 import gc
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from openpyxl import load_workbook
 
-from src.attachment_copier import copy_attachments_for_row
 from src.filename_builder import build_row_folder_name, build_xlsx_filename
-from src.hyperlink_image_loader import add_images_from_paths, collect_image_paths_for_row
-from src.image_handler import strip_hyperlinks_from_xlsx_file
+from src.image_embedder import embed_images_in_column
+from src.multimedia_copier import SAVED_NAME_COLUMN, copy_multimedia_for_row
 from src.sheet_copier import create_split_workbook, is_row_empty
-from src.sheet_path import get_effective_max_row, resolve_sheet_path
-from src.xlsx_hyperlink_index import XlsxHyperlinkIndex
 
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]
 
-REQUIRED_COLUMNS = ("App", "본문")
+REQUIRED_COLUMNS = ("App", "본문", SAVED_NAME_COLUMN)
+ATTACH_COLUMN = "첨부파일"
 
 
 @dataclass
 class SplitResult:
     folders_created: int = 0
     attachments_copied: int = 0
+    images_embedded: int = 0
     rows_skipped: int = 0
     attachment_skips: list[str] = field(default_factory=list)
     row_errors: list[str] = field(default_factory=list)
@@ -35,6 +33,7 @@ class SplitResult:
 class SplitConfig:
     input_path: Path
     output_root: Path
+    multimedia_root: Path
     sheet_name: str
     header_row: int
 
@@ -46,6 +45,8 @@ def validate_config(config: SplitConfig) -> None:
         raise ValueError("INPUT 파일은 .xlsx 확장자여야 합니다.")
     if not config.output_root.is_dir():
         raise FileNotFoundError(f"OUTPUT 폴더를 찾을 수 없습니다: {config.output_root}")
+    if not config.multimedia_root.is_dir():
+        raise FileNotFoundError(f"Multimedia 폴더를 찾을 수 없습니다: {config.multimedia_root}")
     if config.header_row < 1:
         raise ValueError("HEADER ROW는 1 이상이어야 합니다.")
 
@@ -72,33 +73,13 @@ def split_workbook(
 
         column_map = _build_column_map(ws, config.header_row)
         _ensure_required_columns(column_map)
-
-        with zipfile.ZipFile(config.input_path, "r") as archive:
-            sheet_path = resolve_sheet_path(archive, ws, wb)
-            effective_max_row = get_effective_max_row(ws, archive, sheet_path)
-
-        # 핵심: embedded 객체 복사가 아니라, 이미지 하이퍼링크 → 로컬 파일 로드
-        image_index = XlsxHyperlinkIndex(
-            config.input_path,
-            config.header_row,
-            ws=ws,
-            wb=wb,
-        )
-        for line in image_index.summarize():
-            log(line)
-
-        if image_index.total_targets() == 0:
-            from src.cell_image_loader import diagnose_image_sources
-
-            log("이미지 하이퍼링크 0개 - 진단:")
-            for line in diagnose_image_sources(config.input_path, ws, wb):
-                log(f"  {line}")
+        attach_col = column_map.get(ATTACH_COLUMN)
 
         base_name = config.input_path.stem
         min_col = ws.min_column or 1
         max_col = ws.max_column or 1
         first_data_row = config.header_row + 1
-        last_data_row = effective_max_row
+        last_data_row = ws.max_row or config.header_row
 
         data_rows = [
             row
@@ -109,7 +90,6 @@ def split_workbook(
         result.rows_skipped = (last_data_row - first_data_row + 1) - len(data_rows)
         total = len(data_rows)
         row_index = 0
-        body_col = column_map.get("본문", min_col)
 
         for data_row in data_rows:
             row_index += 1
@@ -129,56 +109,45 @@ def split_workbook(
 
             app_value = ws.cell(row=data_row, column=column_map["App"]).value
             body_value = ws.cell(row=data_row, column=column_map["본문"]).value
+            saved_names = ws.cell(row=data_row, column=column_map[SAVED_NAME_COLUMN]).value
             xlsx_name = build_xlsx_filename(base_name, app_value, row_index, body_value)
             xlsx_path = row_folder / xlsx_name
+
+            copy_result = copy_multimedia_for_row(
+                saved_names,
+                config.multimedia_root,
+                row_folder,
+            )
+            result.attachments_copied += len(copy_result.copied)
+            result.attachment_skips.extend(copy_result.skipped)
 
             try:
                 out_wb = create_split_workbook(ws, config.header_row, data_row, config.sheet_name)
                 out_ws = out_wb.active
-
-                image_paths, image_skips = collect_image_paths_for_row(
-                    image_index,
-                    data_row,
-                    config.input_path.parent,
-                )
-                embedded = add_images_from_paths(
-                    out_ws,
-                    image_paths,
-                    anchor_row=data_row,
-                    anchor_col=body_col,
-                )
-                if embedded:
-                    log(f"  하이퍼링크 이미지 {embedded}개 임베드")
-                for skip in image_skips:
-                    log(f"  {skip}")
-                    result.attachment_skips.append(skip)
-
+                embedded = 0
+                if attach_col and copy_result.image_paths:
+                    embedded = embed_images_in_column(
+                        out_ws,
+                        copy_result.image_paths,
+                        attach_col,
+                    )
+                    result.images_embedded += embedded
                 out_wb.save(xlsx_path)
                 out_wb.close()
                 del out_wb
-                strip_hyperlinks_from_xlsx_file(xlsx_path)
             except Exception as exc:
                 message = f"행 {data_row}: XLSX 저장 실패 - {exc}"
                 result.row_errors.append(message)
                 log(message)
                 continue
 
-            attachment_result = copy_attachments_for_row(
-                ws,
-                data_row,
-                config.input_path,
-                row_folder,
-                image_index,
-                config.header_row,
-            )
             result.folders_created += 1
-            result.attachments_copied += len(attachment_result.copied)
-            result.attachment_skips.extend(attachment_result.skipped)
-
             log(f"행 {data_row}: {row_folder.name} 생성 ({xlsx_name})")
-            for copied_name in attachment_result.copied:
-                log(f"  첨부 복사: {copied_name}")
-            for skipped in attachment_result.skipped:
+            for name in copy_result.copied:
+                log(f"  첨부 복사: {name}")
+            if embedded:
+                log(f"  이미지 임베드: {embedded}개 -> {ATTACH_COLUMN}")
+            for skipped in copy_result.skipped:
                 log(f"  첨부 스킵: {skipped}")
 
             if row_index % 100 == 0:
