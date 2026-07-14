@@ -15,7 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 REL_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 REL_EMBED_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 DISPIMG_PATTERN = re.compile(r'DISPIMG\s*\(\s*"([^"]+)"', re.IGNORECASE)
-DIAGNOSE_VERSION = "2026-07-13-f"
+DIAGNOSE_VERSION = "2026-07-14-a"
 
 
 def load_cell_images(xlsx_path: Path, ws: Worksheet, wb=None) -> dict[int, list[Image]]:

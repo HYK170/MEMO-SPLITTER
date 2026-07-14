@@ -16,7 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from openpyxl import load_workbook
 
 from src.cell_image_loader import diagnose_image_sources
-from src.drawing_image_loader import build_images_by_row
+from src.hyperlink_image_loader import collect_image_paths_for_row, is_image_file
+from src.hyperlink_resolver import resolve_local_path
+from src.xlsx_hyperlink_index import XlsxHyperlinkIndex
 
 
 def main() -> None:
@@ -43,11 +45,25 @@ def main() -> None:
     for line in diagnose_image_sources(xlsx_path, ws, wb):
         print(line)
 
-    images_by_row = build_images_by_row(xlsx_path, ws, wb)
-    total = sum(len(v) for v in images_by_row.values())
-    print(f"--- 결과: 이미지 {total}개 인식 ---")
-    for row, images in sorted(images_by_row.items()):
-        print(f"  행 {row}: {len(images)}개")
+    print("--- 이미지 하이퍼링크 ---")
+    image_index = XlsxHyperlinkIndex(xlsx_path, header_row=1, ws=ws, wb=wb)
+    for line in image_index.summarize():
+        print(line)
+
+    resolved_images = 0
+    for target in image_index.unique_targets():
+        local = resolve_local_path(target, xlsx_path.parent)
+        if local and local.is_file() and is_image_file(local):
+            resolved_images += 1
+            print(f"  로드 가능: {local}")
+    print(f"--- 하이퍼링크→이미지 파일 로드 가능: {resolved_images}개 ---")
+
+    # 샘플 행 미리보기
+    for row in sorted(image_index._image_targets_by_row.keys())[:5]:
+        paths, skips = collect_image_paths_for_row(image_index, row, xlsx_path.parent)
+        print(f"  행 {row}: 로드 후보 {len(paths)}개")
+        for skip in skips[:2]:
+            print(f"    {skip}")
 
     wb.close()
 

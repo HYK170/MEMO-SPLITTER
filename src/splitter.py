@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -9,16 +10,10 @@ from openpyxl import load_workbook
 
 from src.attachment_copier import copy_attachments_for_row
 from src.filename_builder import build_row_folder_name, build_xlsx_filename
-from src.drawing_image_loader import build_images_by_row
-from src.drawing_transplant import count_all_source_anchors, transplant_drawings_for_row
-from src.image_handler import (
-    add_row_images,
-    collect_objects_for_row,
-    flatten_unique_objects,
-    index_images_by_row,
-    strip_hyperlinks_from_xlsx_file,
-)
+from src.hyperlink_image_loader import add_images_from_paths, collect_image_paths_for_row
+from src.image_handler import strip_hyperlinks_from_xlsx_file
 from src.sheet_copier import create_split_workbook, is_row_empty
+from src.sheet_path import get_effective_max_row, resolve_sheet_path
 from src.xlsx_hyperlink_index import XlsxHyperlinkIndex
 
 LogCallback = Callable[[str], None]
@@ -78,35 +73,27 @@ def split_workbook(
         column_map = _build_column_map(ws, config.header_row)
         _ensure_required_columns(column_map)
 
-        from src.sheet_path import get_effective_max_row, resolve_sheet_path
-        import zipfile
-
         with zipfile.ZipFile(config.input_path, "r") as archive:
             sheet_path = resolve_sheet_path(archive, ws, wb)
             effective_max_row = get_effective_max_row(ws, archive, sheet_path)
 
-        images_by_row = build_images_by_row(config.input_path, ws, wb, config.header_row)
-        all_objects = flatten_unique_objects(images_by_row)
-        openpyxl_objects = list(getattr(ws, "_images", []))
-        source_anchor_total = count_all_source_anchors(config.input_path, ws, wb)
+        # 핵심: embedded 객체 복사가 아니라, 이미지 하이퍼링크 → 로컬 파일 로드
+        image_index = XlsxHyperlinkIndex(
+            config.input_path,
+            config.header_row,
+            ws=ws,
+            wb=wb,
+        )
+        for line in image_index.summarize():
+            log(line)
 
-        openpyxl_count = sum(
-            len(v) for v in index_images_by_row(ws, config.header_row, effective_max_row).values()
-        )
-        drawing_count = len(all_objects) - len(openpyxl_objects)
-        if drawing_count < 0:
-            drawing_count = sum(len(v) for v in images_by_row.values())
-        log(
-            f"시각 객체 {len(all_objects)}개 인식 / drawing anchor {source_anchor_total}개 "
-            f"(openpyxl {openpyxl_count}, drawing-loader {drawing_count})"
-        )
-        if len(all_objects) == 0 and source_anchor_total == 0:
+        if image_index.total_targets() == 0:
             from src.cell_image_loader import diagnose_image_sources
 
-            log("객체 진단:")
+            log("이미지 하이퍼링크 0개 - 진단:")
             for line in diagnose_image_sources(config.input_path, ws, wb):
                 log(f"  {line}")
-        image_index = XlsxHyperlinkIndex(config.input_path, config.header_row)
+
         base_name = config.input_path.stem
         min_col = ws.min_column or 1
         max_col = ws.max_column or 1
@@ -122,6 +109,7 @@ def split_workbook(
         result.rows_skipped = (last_data_row - first_data_row + 1) - len(data_rows)
         total = len(data_rows)
         row_index = 0
+        body_col = column_map.get("본문", min_col)
 
         for data_row in data_rows:
             row_index += 1
@@ -147,37 +135,27 @@ def split_workbook(
             try:
                 out_wb = create_split_workbook(ws, config.header_row, data_row, config.sheet_name)
                 out_ws = out_wb.active
-                row_openpyxl = collect_objects_for_row(
-                    openpyxl_objects,
+
+                image_paths, image_skips = collect_image_paths_for_row(
+                    image_index,
                     data_row,
-                    config.header_row,
+                    config.input_path.parent,
                 )
-                if row_openpyxl:
-                    add_row_images(out_ws, row_openpyxl)
+                embedded = add_images_from_paths(
+                    out_ws,
+                    image_paths,
+                    anchor_row=data_row,
+                    anchor_col=body_col,
+                )
+                if embedded:
+                    log(f"  하이퍼링크 이미지 {embedded}개 임베드")
+                for skip in image_skips:
+                    log(f"  {skip}")
+                    result.attachment_skips.append(skip)
+
                 out_wb.save(xlsx_path)
                 out_wb.close()
                 del out_wb
-
-                try:
-                    transplanted = transplant_drawings_for_row(
-                        config.input_path,
-                        xlsx_path,
-                        ws,
-                        wb,
-                        data_row,
-                        config.header_row,
-                    )
-                except Exception as exc:
-                    message = f"행 {data_row}: drawing 객체 이식 실패 - {exc}"
-                    result.row_errors.append(message)
-                    log(message)
-                    transplanted = 0
-
-                if transplanted:
-                    log(f"  drawing 객체 {transplanted}개 이식")
-                elif row_openpyxl:
-                    log(f"  openpyxl 객체 {len(row_openpyxl)}개 포함")
-
                 strip_hyperlinks_from_xlsx_file(xlsx_path)
             except Exception as exc:
                 message = f"행 {data_row}: XLSX 저장 실패 - {exc}"

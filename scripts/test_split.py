@@ -93,7 +93,7 @@ def test_image_matches_row_one_cell_above() -> None:
         b"\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
     )
 
-    # Samsung Notes 패턴: anchor가 Excel 3행이면 데이터 2행에도 매칭
+    # oneCell: anchor 행 ±1 매칭
     image = Image(BytesIO(png_bytes))
     marker = AnchorMarker(col=0, row=2, colOff=0, rowOff=0)
     image.anchor = OneCellAnchor(_from=marker, ext=XDRPositiveSize2D(pixels_to_EMU(32), pixels_to_EMU(32)))
@@ -144,6 +144,139 @@ def test_create_openpyxl_image_from_emf_bytes() -> None:
     assert image._data() == emf_bytes
 
 
+def test_hyperlink_index_and_reload(tmp: Path) -> None:
+    """drawing 이미지 하이퍼링크 → 로컬 파일 로드 → 새 시트 임베드."""
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    from openpyxl import load_workbook
+
+    from src.hyperlink_image_loader import add_images_from_paths, collect_image_paths_for_row
+    from src.xlsx_hyperlink_index import XlsxHyperlinkIndex
+
+    img_file = tmp / "photo.png"
+    img_file.write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc``\x00\x00"
+        b"\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    xlsx_path = tmp / "linked.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "메모"
+    ws.cell(row=1, column=1, value="App")
+    ws.cell(row=1, column=2, value="본문")
+    ws.cell(row=2, column=1, value="AppX")
+    ws.cell(row=2, column=2, value="제목 : 링크이미지")
+    wb.save(xlsx_path)
+    wb.close()
+
+    # drawing + hyperlink rel 주입
+    with zipfile.ZipFile(xlsx_path, "a") as z:
+        drawing = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:oneCellAnchor>
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="1000000" cy="1000000"/>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="2" name="Picture 1">
+          <a:hlinkClick r:id="rId2"/>
+        </xdr:cNvPr>
+        <xdr:cNvPicPr/>
+      </xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip r:embed="rId1"/>
+        <a:stretch><a:fillRect/></a:stretch>
+      </xdr:blipFill>
+      <xdr:spPr/>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>
+</xdr:wsDr>
+"""
+        z.writestr("xl/drawings/drawing1.xml", drawing)
+        target = str(img_file).replace("\\", "/")
+        rels = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{target}" TargetMode="External"/>
+</Relationships>
+"""
+        z.writestr("xl/drawings/_rels/drawing1.xml.rels", rels)
+        z.writestr("xl/media/image1.png", img_file.read_bytes())
+
+        # sheet rel -> drawing
+        sheet_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>
+"""
+        z.writestr("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels)
+
+        # add drawing tag to sheet
+        sheet_xml = z.read("xl/worksheets/sheet1.xml")
+        root = ET.fromstring(sheet_xml)
+        drawing_el = ET.Element("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}drawing")
+        drawing_el.set("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "rId1")
+        root.append(drawing_el)
+        # rewrite: ZipFile append can't replace easily — write to new zip
+        # Skip in-place replace: open as read and rewrite whole file below
+
+    # Rewrite package properly
+    buf_names: dict[str, bytes] = {}
+    with zipfile.ZipFile(xlsx_path, "r") as zin:
+        for name in zin.namelist():
+            buf_names[name] = zin.read(name)
+    sheet_xml = buf_names["xl/worksheets/sheet1.xml"]
+    root = ET.fromstring(sheet_xml)
+    if not any(el.tag.endswith("}drawing") for el in root):
+        drawing_el = ET.Element("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}drawing")
+        drawing_el.set("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "rId1")
+        root.append(drawing_el)
+        buf_names["xl/worksheets/sheet1.xml"] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    buf_names["xl/drawings/drawing1.xml"] = drawing.encode("utf-8")
+    buf_names["xl/drawings/_rels/drawing1.xml.rels"] = rels.encode("utf-8")
+    buf_names["xl/media/image1.png"] = img_file.read_bytes()
+    buf_names["xl/worksheets/_rels/sheet1.xml.rels"] = sheet_rels.encode("utf-8")
+    # content types
+    ct = ET.fromstring(buf_names["[Content_Types].xml"])
+    ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+    if not any(el.attrib.get("PartName") == "/xl/drawings/drawing1.xml" for el in ct):
+        ov = ET.SubElement(ct, f"{{{ct_ns}}}Override")
+        ov.set("PartName", "/xl/drawings/drawing1.xml")
+        ov.set("ContentType", "application/vnd.openxmlformats-officedocument.drawing+xml")
+        buf_names["[Content_Types].xml"] = ET.tostring(ct, encoding="utf-8", xml_declaration=True)
+
+    with zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in buf_names.items():
+            zout.writestr(name, data)
+
+    wb = load_workbook(xlsx_path)
+    ws = wb["메모"]
+    index = XlsxHyperlinkIndex(xlsx_path, header_row=1, ws=ws, wb=wb)
+    assert index.total_targets() > 0, "drawing 하이퍼링크를 못 찾음"
+    paths, skips = collect_image_paths_for_row(index, 2, tmp)
+    assert paths and paths[0].resolve() == img_file.resolve(), (paths, skips)
+
+    out = Workbook()
+    out_ws = out.active
+    added = add_images_from_paths(out_ws, paths, anchor_row=2, anchor_col=2)
+    assert added == 1
+    out_path = tmp / "out.xlsx"
+    out.save(out_path)
+    out.close()
+    wb.close()
+
+    # 출력에 media 존재
+    with zipfile.ZipFile(out_path) as z:
+        media = [n for n in z.namelist() if n.startswith("xl/media/")]
+        assert media, "출력 XLSX에 이미지가 없음"
+
+
 def main() -> None:
     test_parse_title_first_line_only()
     test_image_matches_row_one_cell_above()
@@ -152,6 +285,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         test_resolve_local_path_encoded_and_mixed_slashes(root)
+        test_hyperlink_index_and_reload(root)
 
         input_path = root / "memo.xlsx"
         attachment = root / "sample attachment.txt"
