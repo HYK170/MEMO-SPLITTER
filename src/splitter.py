@@ -152,10 +152,11 @@ def split_workbook(
             xlsx_name = build_xlsx_filename(base_name, app_value, row_index, body_value)
             xlsx_path = row_folder / xlsx_name
 
+            attachments_folder = row_folder / "Attachments"
             copy_result = copy_multimedia_for_row(
                 saved_names,
                 config.multimedia_root,
-                row_folder,
+                attachments_folder,
             )
             result.attachments_copied += len(copy_result.copied)
             result.attachment_skips.extend(copy_result.skipped)

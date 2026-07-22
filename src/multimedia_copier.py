@@ -68,6 +68,7 @@ def copy_multimedia_for_row(
             result.skipped.append(f"파일 없음: {relative}")
             continue
 
+        dest_folder.mkdir(parents=True, exist_ok=True)
         dest = unique_dest_path(dest_folder, source.name)
         try:
             shutil.copy2(source, dest)

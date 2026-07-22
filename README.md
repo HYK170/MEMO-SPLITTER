@@ -52,13 +52,15 @@ python main.py
 └── Memo_20260714132400/
     ├── memo_001/
     │   ├── memo_Kakao_001_회의록.xlsx
-    │   ├── shot.png
-    │   └── memo.txt
+    │   └── Attachments/
+    │       ├── shot.png
+    │       └── memo.txt
     └── ...
 ```
 
 - 출력 루트: `Memo_{timestamp}` (초 단위 시리얼, 충돌 시 `_2`, `_3` …)
 - 행별 폴더명: `{원본명}_{행번호0패딩}`
+- 첨부파일: 행 폴더 하위 `Attachments/`에 저장 (첨부 있을 때만 생성)
 - XLSX: 항상 **1행=HEADER, 2행=데이터**
 - 이미지는 파일로 복사 + `첨부 파일` 열에 임베드
-- 이미지가 아닌 첨부는 폴더에만 복사
+- 이미지가 아닌 첨부는 `Attachments/`에만 복사

@@ -119,8 +119,10 @@ def main() -> None:
         assert not result.row_errors
 
         folder1 = result.output_root / "memo_001"
-        assert (folder1 / "shot.png").is_file()
-        assert (folder1 / "memo.txt").is_file()
+        attachments1 = folder1 / "Attachments"
+        assert (attachments1 / "shot.png").is_file()
+        assert (attachments1 / "memo.txt").is_file()
+        assert not (folder1 / "shot.png").exists()
 
         first_xlsx = next(folder1.glob("*.xlsx"))
         check_wb = load_workbook(first_xlsx)
@@ -135,7 +137,13 @@ def main() -> None:
             assert any(n.startswith("xl/media/") for n in z.namelist())
 
         for folder in sorted(result.output_root.iterdir()):
-            print("FOLDER", folder.name, [p.name for p in folder.iterdir()])
+            children = []
+            for p in folder.iterdir():
+                if p.is_dir():
+                    children.append(f"{p.name}/[{', '.join(c.name for c in p.iterdir())}]")
+                else:
+                    children.append(p.name)
+            print("FOLDER", folder.name, children)
 
     # NBSP / 공백 없는 헤더도 매칭되어야 함
     with tempfile.TemporaryDirectory() as tmp:
