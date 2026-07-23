@@ -27,18 +27,18 @@ def build_row_folder_name(base_name: str, row_index: int) -> str:
     return sanitize_windows_filename(f"{base_name}_{row_no}")
 
 
+def build_attachments_folder_name(base_name: str, row_index: int) -> str:
+    row_no = str(row_index).zfill(3)
+    return sanitize_windows_filename(f"{base_name}_{row_no}_attach")
+
+
 def build_xlsx_filename(
     base_name: str,
-    app: str | None,
     row_index: int,
-    body: str | None,
     existing_names: set[str] | None = None,
 ) -> str:
-    app_text = sanitize_windows_filename(str(app).strip() if app is not None else "")
     row_no = str(row_index).zfill(3)
-    title = sanitize_windows_filename(parse_title(body))
-    filename = f"{base_name}_{app_text}_{row_no}_{title}.xlsx"
-    filename = sanitize_windows_filename(filename)
+    filename = sanitize_windows_filename(f"{base_name}_{row_no}.xlsx")
 
     if len(filename) > MAX_FILENAME_LEN:
         stem = filename[: MAX_FILENAME_LEN - 5]

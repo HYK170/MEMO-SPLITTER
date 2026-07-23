@@ -10,7 +10,11 @@ from typing import Callable
 
 from openpyxl import load_workbook
 
-from src.filename_builder import build_row_folder_name, build_xlsx_filename
+from src.filename_builder import (
+    build_attachments_folder_name,
+    build_row_folder_name,
+    build_xlsx_filename,
+)
 from src.image_embedder import embed_images_in_column, ensure_pillow
 from src.multimedia_copier import SAVED_NAME_COLUMN, copy_multimedia_for_row
 from src.sheet_copier import create_split_workbook, is_row_empty
@@ -43,15 +47,16 @@ class SplitConfig:
 
 
 def build_memo_output_root(input_path: Path, now: datetime | None = None) -> Path:
-    """INPUT XLSX와 같은 경로에 Memo_{YYYYMMDDHHMMSS} 폴더 경로를 만든다."""
+    """INPUT XLSX와 같은 경로에 {원본파일명}_{YYYYMMDDHHMMSS} 폴더 경로를 만든다."""
     parent = input_path.resolve().parent
+    base_name = input_path.stem
     stamp = (now or datetime.now()).strftime("%Y%m%d%H%M%S")
-    candidate = parent / f"Memo_{stamp}"
+    candidate = parent / f"{base_name}_{stamp}"
     if not candidate.exists():
         return candidate
     counter = 2
     while True:
-        numbered = parent / f"Memo_{stamp}_{counter}"
+        numbered = parent / f"{base_name}_{stamp}_{counter}"
         if not numbered.exists():
             return numbered
         counter += 1
@@ -146,13 +151,11 @@ def split_workbook(
                 log(message)
                 continue
 
-            app_value = ws.cell(row=data_row, column=column_map["App"]).value
-            body_value = ws.cell(row=data_row, column=column_map["본문"]).value
             saved_names = ws.cell(row=data_row, column=column_map[SAVED_NAME_COLUMN]).value
-            xlsx_name = build_xlsx_filename(base_name, app_value, row_index, body_value)
+            xlsx_name = build_xlsx_filename(base_name, row_index)
             xlsx_path = row_folder / xlsx_name
 
-            attachments_folder = row_folder / "Attachments"
+            attachments_folder = row_folder / build_attachments_folder_name(base_name, row_index)
             copy_result = copy_multimedia_for_row(
                 saved_names,
                 config.multimedia_root,

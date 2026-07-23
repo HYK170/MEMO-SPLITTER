@@ -37,7 +37,7 @@ class MemoSplitterApp(ctk.CTk):
 
         subtitle = ctk.CTkLabel(
             self,
-            text="XLSX를 HEADER + 1행 단위로 분할합니다. 결과는 INPUT과 같은 경로의 Memo_{timestamp} 폴더에 저장됩니다.",
+            text="XLSX를 HEADER + 1행 단위로 분할합니다. 결과는 INPUT과 같은 경로의 {원본파일명}_{timestamp} 폴더에 저장됩니다.",
             font=ctk.CTkFont(size=13),
         )
         subtitle.pack(anchor="w", padx=16, pady=(0, 12))

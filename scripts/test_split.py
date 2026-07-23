@@ -48,10 +48,10 @@ def test_build_memo_output_root() -> None:
         from datetime import datetime
 
         first = build_memo_output_root(input_path, now=datetime(2026, 7, 14, 13, 24, 0))
-        assert first.name == "Memo_20260714132400"
+        assert first.name == "memo_20260714132400"
         first.mkdir()
         second = build_memo_output_root(input_path, now=datetime(2026, 7, 14, 13, 24, 0))
-        assert second.name == "Memo_20260714132400_2"
+        assert second.name == "memo_20260714132400_2"
 
 
 def create_sample_workbook(path: Path, attach_header: str = "첨부 파일") -> None:
@@ -111,7 +111,7 @@ def main() -> None:
         print("RESULT", result)
         assert result.output_root is not None
         assert result.output_root.parent == root
-        assert result.output_root.name.startswith("Memo_")
+        assert result.output_root.name.startswith("memo_")
         assert result.folders_created == 3
         assert result.attachments_copied == 3
         assert result.images_embedded == 2
@@ -119,12 +119,13 @@ def main() -> None:
         assert not result.row_errors
 
         folder1 = result.output_root / "memo_001"
-        attachments1 = folder1 / "Attachments"
+        attachments1 = folder1 / "memo_001_attach"
         assert (attachments1 / "shot.png").is_file()
         assert (attachments1 / "memo.txt").is_file()
         assert not (folder1 / "shot.png").exists()
 
-        first_xlsx = next(folder1.glob("*.xlsx"))
+        first_xlsx = folder1 / "memo_001.xlsx"
+        assert first_xlsx.is_file()
         check_wb = load_workbook(first_xlsx)
         check_ws = check_wb.active
         assert check_ws.cell(1, 1).value == "App"
