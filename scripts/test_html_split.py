@@ -77,6 +77,18 @@ def test_parse_first_table_thead() -> None:
     assert 'href="images/shot.png"' in table.rows[0][2].html
 
 
+def test_parse_omitted_end_tags() -> None:
+    html = (
+        "<table><tr><td>App<td>본문<td>첨부파일"
+        "<tr><td>Kakao<td>제목 : 회의록<td><a href=\"images/shot.png\">f</a></table>"
+    )
+    table = parse_first_table(html)
+    assert table.headers == ["App", "본문", "첨부파일"]
+    assert len(table.rows) == 1
+    assert table.rows[0][0].text == "Kakao"
+    assert "images/shot.png" in table.rows[0][2].html
+
+
 def test_parse_th_without_thead() -> None:
     html = """
     <table>
@@ -164,6 +176,7 @@ def test_split_html_integration() -> None:
 
 def main() -> None:
     test_parse_first_table_thead()
+    test_parse_omitted_end_tags()
     test_parse_th_without_thead()
     test_extract_href_paths()
     test_is_row_empty()

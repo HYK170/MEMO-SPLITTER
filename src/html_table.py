@@ -50,12 +50,12 @@ def _attrs_to_str(attrs: list[tuple[str, str | None]]) -> str:
 
 def _format_start_tag(tag: str, attrs: list[tuple[str, str | None]]) -> str:
     attr_str = _attrs_to_str(attrs)
-    if tag in VOID_ELEMENTS:
-        return f"<{tag}{attr_str}>"
     return f"<{tag}{attr_str}>"
 
 
 class _FirstTableParser(HTMLParser):
+    """첫 번째 table을 파싱한다. </td></tr> 생략(HTML optional end tags)도 허용한다."""
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.depth = 0
@@ -74,7 +74,34 @@ class _FirstTableParser(HTMLParser):
 
         self.thead_rows: list[list[Cell]] = []
         self.body_rows: list[list[Cell]] = []
-        self.all_rows: list[tuple[list[Cell], bool]] = []  # (cells, has_th)
+        self.all_rows: list[tuple[list[Cell], bool]] = []
+
+    def _finish_cell(self) -> None:
+        if not self.in_cell:
+            return
+        cell = Cell(
+            text="".join(self.current_cell_text).strip(),
+            html="".join(self.current_cell_html),
+        )
+        self.current_row_cells.append(cell)
+        self.in_cell = False
+        self.cell_tag = None
+        self.current_cell_text = []
+        self.current_cell_html = []
+
+    def _finish_row(self) -> None:
+        self._finish_cell()
+        if not self.in_tr:
+            return
+        row = self.current_row_cells
+        if self.in_thead:
+            self.thead_rows.append(row)
+        else:
+            self.body_rows.append(row)
+        self.all_rows.append((row, self.current_row_has_th))
+        self.in_tr = False
+        self.current_row_cells = []
+        self.current_row_has_th = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self.done:
@@ -101,16 +128,28 @@ class _FirstTableParser(HTMLParser):
             return
 
         if tag == "thead":
+            self._finish_row()
             self.in_thead = True
             return
 
+        if tag in ("tbody", "tfoot"):
+            self._finish_row()
+            self.in_thead = False
+            return
+
         if tag == "tr":
+            self._finish_row()
             self.in_tr = True
             self.current_row_cells = []
             self.current_row_has_th = False
             return
 
-        if tag in ("th", "td") and self.in_tr:
+        if tag in ("th", "td"):
+            if not self.in_tr:
+                self.in_tr = True
+                self.current_row_cells = []
+                self.current_row_has_th = False
+            self._finish_cell()
             self.in_cell = True
             self.cell_tag = tag  # type: ignore[assignment]
             self.current_cell_text = []
@@ -129,6 +168,8 @@ class _FirstTableParser(HTMLParser):
             return
 
         if tag == "table":
+            if self.depth == 1:
+                self._finish_row()
             self.depth -= 1
             if self.depth == 0:
                 self.in_table = False
@@ -143,27 +184,20 @@ class _FirstTableParser(HTMLParser):
             return
 
         if tag == "thead":
+            self._finish_row()
             self.in_thead = False
             return
 
-        if tag in ("th", "td") and self.in_cell:
-            cell = Cell(
-                text="".join(self.current_cell_text).strip(),
-                html="".join(self.current_cell_html),
-            )
-            self.current_row_cells.append(cell)
-            self.in_cell = False
-            self.cell_tag = None
+        if tag in ("tbody", "tfoot"):
+            self._finish_row()
             return
 
-        if tag == "tr" and self.in_tr:
-            row = self.current_row_cells
-            if self.in_thead:
-                self.thead_rows.append(row)
-            else:
-                self.body_rows.append(row)
-            self.all_rows.append((row, self.current_row_has_th))
-            self.in_tr = False
+        if tag in ("th", "td"):
+            self._finish_cell()
+            return
+
+        if tag == "tr":
+            self._finish_row()
             return
 
         if self.in_cell and tag not in VOID_ELEMENTS:
@@ -188,6 +222,8 @@ def parse_first_table(html_text: str) -> ParsedTable:
     parser = _FirstTableParser()
     parser.feed(html_text)
     parser.close()
+    if parser.in_table:
+        parser._finish_row()
 
     if not parser.all_rows and not parser.thead_rows:
         raise ValueError("HTML에서 <table>을 찾을 수 없습니다.")
@@ -198,7 +234,6 @@ def parse_first_table(html_text: str) -> ParsedTable:
     if parser.thead_rows:
         header_row = parser.thead_rows[0]
         data_rows = list(parser.body_rows)
-        # thead 이후 all_rows에 중복될 수 있으므로 body_rows만 사용
     else:
         header_idx = None
         for idx, (row, has_th) in enumerate(parser.all_rows):
@@ -206,7 +241,10 @@ def parse_first_table(html_text: str) -> ParsedTable:
                 header_idx = idx
                 break
         if header_idx is None:
-            raise ValueError("테이블 헤더 행(<th> 또는 <thead>)을 찾을 수 없습니다.")
+            # Excel 등: 첫 행이 <td>만 있는 헤더인 경우
+            if not parser.all_rows:
+                raise ValueError("테이블 헤더 행(<th> 또는 <thead>)을 찾을 수 없습니다.")
+            header_idx = 0
         header_row = parser.all_rows[header_idx][0]
         data_rows = [row for row, _ in parser.all_rows[header_idx + 1 :]]
 

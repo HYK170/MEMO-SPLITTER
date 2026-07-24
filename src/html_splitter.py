@@ -20,7 +20,10 @@ ProgressCallback = Callable[[int, int], None]
 
 HTML_REQUIRED_COLUMNS = ("App", "본문", "첨부파일")
 _HEADER_WHITESPACE = re.compile(r"\s+", re.UNICODE)
-_HREF_RE = re.compile(r"""href\s*=\s*(["'])(.*?)\1""", re.IGNORECASE | re.DOTALL)
+_HREF_RE = re.compile(
+    r"""href\s*=\s*(?:(["'])(.*?)\1|([^\s>]+))""",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass
@@ -36,6 +39,16 @@ def validate_html_config(config: HtmlSplitConfig) -> None:
         raise ValueError("INPUT 파일은 .html 또는 .htm 확장자여야 합니다.")
     if not config.multimedia_root.is_dir():
         raise FileNotFoundError(f"Multimedia 폴더를 찾을 수 없습니다: {config.multimedia_root}")
+
+
+def _read_html_text(path: Path) -> str:
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp949", "euc-kr", "utf-16"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def split_html(
@@ -54,10 +67,12 @@ def split_html(
     log(f"OUTPUT: {output_root}")
     log(f"Python: {sys.executable}")
 
-    html_text = config.input_path.read_text(encoding="utf-8-sig")
+    html_text = _read_html_text(config.input_path)
     table = parse_first_table(html_text)
     column_map = _build_column_map(table.headers)
     _ensure_required_columns(column_map)
+    log(f"헤더: {', '.join(table.headers)}")
+    log(f"데이터 행(빈 행 제외 전): {len(table.rows)}")
 
     data_rows = [row for row in table.rows if not is_row_empty(row)]
     result = SplitResult(output_root=output_root)
@@ -66,6 +81,7 @@ def split_html(
     base_name = config.input_path.stem
     header_html = table.header_cells_html
     col_count = len(header_html)
+    log(f"처리 대상 행: {total}")
 
     for row_index, cells in enumerate(data_rows, start=1):
         if on_progress:
@@ -103,7 +119,7 @@ def split_html(
             content = build_split_html(header_html, data_html)
             html_path.write_text(content, encoding="utf-8")
         except OSError as exc:
-            message = f"행 {row_index}: HTML 저장 실패 - {exc}"
+            message = f"행 {row_index}: HTML 저장 실패 ({html_path.name}) - {exc}"
             result.row_errors.append(message)
             log(message)
             continue
@@ -123,7 +139,7 @@ def extract_href_paths(cell_html: str) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
     for match in _HREF_RE.finditer(cell_html or ""):
-        href = match.group(2).strip()
+        href = (match.group(2) if match.group(2) is not None else match.group(3) or "").strip()
         if not href or _is_external_or_special_href(href):
             continue
         cleaned = href.replace("\\", "/")
