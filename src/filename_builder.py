@@ -52,6 +52,19 @@ def build_xlsx_filename(
     return filename
 
 
+def build_html_filename(
+    base_name: str,
+    row_index: int,
+    body: str | None,
+    existing_names: set[str] | None = None,
+) -> str:
+    xlsx_name = build_xlsx_filename(base_name, row_index, body, existing_names=None)
+    filename = f"{Path(xlsx_name).stem}.html"
+    if existing_names is not None:
+        filename = _dedupe_filename(filename, existing_names)
+    return filename
+
+
 def _dedupe_filename(filename: str, existing_names: set[str]) -> str:
     if filename not in existing_names:
         existing_names.add(filename)

@@ -7,8 +7,21 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from src.html_splitter import HtmlSplitConfig, split_html
 from src.sheet_copier import list_sheet_names
 from src.splitter import SplitConfig, split_workbook
+
+MODE_XLSX = "XLSX"
+MODE_HTML = "HTML"
+
+SUBTITLE_XLSX = (
+    "XLSX를 HEADER + 1행 단위로 분할합니다. "
+    "결과는 INPUT과 같은 경로의 {원본파일명}_{timestamp} 폴더에 저장됩니다."
+)
+SUBTITLE_HTML = (
+    "HTML 테이블을 헤더 + 1행 단위로 분할합니다. "
+    "결과는 INPUT과 같은 경로의 {원본파일명}_{timestamp} 폴더에 저장됩니다."
+)
 
 
 class MemoSplitterApp(ctk.CTk):
@@ -21,6 +34,7 @@ class MemoSplitterApp(ctk.CTk):
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
+        self.mode_var = tk.StringVar(value=MODE_XLSX)
         self.input_var = tk.StringVar()
         self.multimedia_var = tk.StringVar()
         self.sheet_var = tk.StringVar()
@@ -30,33 +44,61 @@ class MemoSplitterApp(ctk.CTk):
         self._worker: threading.Thread | None = None
 
         self._build_layout()
+        self._apply_mode()
 
     def _build_layout(self) -> None:
         title = ctk.CTkLabel(self, text="MEMO SPLITTER", font=ctk.CTkFont(size=22, weight="bold"))
         title.pack(anchor="w", padx=16, pady=(16, 4))
 
-        subtitle = ctk.CTkLabel(
+        mode_frame = ctk.CTkFrame(self, fg_color="transparent")
+        mode_frame.pack(anchor="w", padx=16, pady=(0, 4))
+        ctk.CTkLabel(mode_frame, text="모드").pack(side="left", padx=(0, 8))
+        self.mode_segment = ctk.CTkSegmentedButton(
+            mode_frame,
+            values=[MODE_XLSX, MODE_HTML],
+            variable=self.mode_var,
+            command=self._on_mode_change,
+        )
+        self.mode_segment.pack(side="left")
+
+        self.subtitle = ctk.CTkLabel(
             self,
-            text="XLSX를 HEADER + 1행 단위로 분할합니다. 결과는 INPUT과 같은 경로의 {원본파일명}_{timestamp} 폴더에 저장됩니다.",
+            text=SUBTITLE_XLSX,
             font=ctk.CTkFont(size=13),
         )
-        subtitle.pack(anchor="w", padx=16, pady=(0, 12))
+        self.subtitle.pack(anchor="w", padx=16, pady=(0, 12))
 
-        form = ctk.CTkFrame(self)
-        form.pack(fill="x", padx=16, pady=8)
-        form.grid_columnconfigure(1, weight=1)
+        self.form = ctk.CTkFrame(self)
+        self.form.pack(fill="x", padx=16, pady=8)
+        self.form.grid_columnconfigure(1, weight=1)
 
-        self._add_path_row(form, 0, "INPUT XLSX", self.input_var, self._browse_input, is_file=True)
-        self._add_path_row(
-            form, 1, "Multimedia 폴더", self.multimedia_var, self._browse_multimedia, is_file=False
+        self.input_label = ctk.CTkLabel(self.form, text="INPUT XLSX")
+        self.input_label.grid(row=0, column=0, sticky="w", padx=12, pady=10)
+        self.input_entry = ctk.CTkEntry(self.form, textvariable=self.input_var)
+        self.input_entry.grid(row=0, column=1, sticky="ew", padx=12, pady=10)
+        self.input_button = ctk.CTkButton(
+            self.form, text="찾기", width=70, command=self._browse_input
+        )
+        self.input_button.grid(row=0, column=2, padx=12, pady=10)
+
+        ctk.CTkLabel(self.form, text="Multimedia 폴더").grid(
+            row=1, column=0, sticky="w", padx=12, pady=10
+        )
+        ctk.CTkEntry(self.form, textvariable=self.multimedia_var).grid(
+            row=1, column=1, sticky="ew", padx=12, pady=10
+        )
+        ctk.CTkButton(self.form, text="폴더", width=70, command=self._browse_multimedia).grid(
+            row=1, column=2, padx=12, pady=10
         )
 
-        ctk.CTkLabel(form, text="SHEET").grid(row=2, column=0, sticky="w", padx=12, pady=10)
-        self.sheet_combo = ctk.CTkComboBox(form, variable=self.sheet_var, values=[""])
+        self.sheet_label = ctk.CTkLabel(self.form, text="SHEET")
+        self.sheet_label.grid(row=2, column=0, sticky="w", padx=12, pady=10)
+        self.sheet_combo = ctk.CTkComboBox(self.form, variable=self.sheet_var, values=[""])
         self.sheet_combo.grid(row=2, column=1, sticky="ew", padx=12, pady=10)
 
-        ctk.CTkLabel(form, text="HEADER ROW").grid(row=3, column=0, sticky="w", padx=12, pady=10)
-        self.header_spin = ctk.CTkEntry(form, textvariable=self.header_row_var, width=80)
+        self.header_label = ctk.CTkLabel(self.form, text="HEADER ROW")
+        self.header_label.grid(row=3, column=0, sticky="w", padx=12, pady=10)
+        self.header_spin = ctk.CTkEntry(self.form, textvariable=self.header_row_var, width=80)
         self.header_spin.grid(row=3, column=1, sticky="w", padx=12, pady=10)
 
         self.run_button = ctk.CTkButton(self, text="SPLIT 실행", command=self._start_split)
@@ -78,24 +120,40 @@ class MemoSplitterApp(ctk.CTk):
         self.log_box.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         self.log_box.configure(state="disabled")
 
-    def _add_path_row(
-        self,
-        parent: ctk.CTkFrame,
-        row: int,
-        label: str,
-        variable: tk.StringVar,
-        command,
-        is_file: bool,
-    ) -> None:
-        ctk.CTkLabel(parent, text=label).grid(row=row, column=0, sticky="w", padx=12, pady=10)
-        entry = ctk.CTkEntry(parent, textvariable=variable)
-        entry.grid(row=row, column=1, sticky="ew", padx=12, pady=10)
-        button_label = "찾기" if is_file else "폴더"
-        ctk.CTkButton(parent, text=button_label, width=70, command=command).grid(
-            row=row, column=2, padx=12, pady=10
-        )
+    def _on_mode_change(self, _value: str | None = None) -> None:
+        self.input_var.set("")
+        self.sheet_var.set("")
+        self.sheet_combo.configure(values=[""])
+        self._apply_mode()
+
+    def _apply_mode(self) -> None:
+        is_xlsx = self.mode_var.get() == MODE_XLSX
+        if is_xlsx:
+            self.subtitle.configure(text=SUBTITLE_XLSX)
+            self.input_label.configure(text="INPUT XLSX")
+            self.sheet_label.grid()
+            self.sheet_combo.grid()
+            self.header_label.grid()
+            self.header_spin.grid()
+        else:
+            self.subtitle.configure(text=SUBTITLE_HTML)
+            self.input_label.configure(text="INPUT HTML")
+            self.sheet_label.grid_remove()
+            self.sheet_combo.grid_remove()
+            self.header_label.grid_remove()
+            self.header_spin.grid_remove()
 
     def _browse_input(self) -> None:
+        if self.mode_var.get() == MODE_HTML:
+            path = filedialog.askopenfilename(
+                title="INPUT HTML 선택",
+                filetypes=[("HTML files", "*.html;*.htm"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            self.input_var.set(path)
+            return
+
         path = filedialog.askopenfilename(
             title="INPUT XLSX 선택",
             filetypes=[("Excel files", "*.xlsx")],
@@ -127,22 +185,34 @@ class MemoSplitterApp(ctk.CTk):
             messagebox.showwarning("실행 중", "이미 SPLIT 작업이 진행 중입니다.")
             return
 
-        try:
-            header_row = int(self.header_row_var.get())
-        except (tk.TclError, ValueError):
-            messagebox.showerror("입력 오류", "HEADER ROW는 숫자여야 합니다.")
-            return
+        input_path = Path(self.input_var.get().strip())
+        multimedia_root = Path(self.multimedia_var.get().strip())
 
-        config = SplitConfig(
-            input_path=Path(self.input_var.get().strip()),
-            multimedia_root=Path(self.multimedia_var.get().strip()),
-            sheet_name=self.sheet_var.get().strip(),
-            header_row=header_row,
-        )
+        if self.mode_var.get() == MODE_HTML:
+            config: SplitConfig | HtmlSplitConfig = HtmlSplitConfig(
+                input_path=input_path,
+                multimedia_root=multimedia_root,
+            )
+            worker_target = self._run_html_split_thread
+        else:
+            try:
+                header_row = int(self.header_row_var.get())
+            except (tk.TclError, ValueError):
+                messagebox.showerror("입력 오류", "HEADER ROW는 숫자여야 합니다.")
+                return
 
-        if not config.sheet_name:
-            messagebox.showerror("입력 오류", "SHEET를 선택하세요.")
-            return
+            sheet_name = self.sheet_var.get().strip()
+            if not sheet_name:
+                messagebox.showerror("입력 오류", "SHEET를 선택하세요.")
+                return
+
+            config = SplitConfig(
+                input_path=input_path,
+                multimedia_root=multimedia_root,
+                sheet_name=sheet_name,
+                header_row=header_row,
+            )
+            worker_target = self._run_xlsx_split_thread
 
         self.run_button.configure(state="disabled")
         self.progress_var.set(0)
@@ -150,13 +220,13 @@ class MemoSplitterApp(ctk.CTk):
         self._clear_log()
 
         self._worker = threading.Thread(
-            target=self._run_split_thread,
+            target=worker_target,
             args=(config,),
             daemon=True,
         )
         self._worker.start()
 
-    def _run_split_thread(self, config: SplitConfig) -> None:
+    def _run_xlsx_split_thread(self, config: SplitConfig) -> None:
         try:
             result = split_workbook(
                 config,
@@ -169,7 +239,22 @@ class MemoSplitterApp(ctk.CTk):
             self.after(0, self._on_split_failed, str(exc))
             return
 
-        self.after(0, self._on_split_complete, result)
+        self.after(0, self._on_split_complete, result, MODE_XLSX)
+
+    def _run_html_split_thread(self, config: HtmlSplitConfig) -> None:
+        try:
+            result = split_html(
+                config,
+                on_log=lambda message: self.after(0, self._append_log, message),
+                on_progress=lambda current, total: self.after(
+                    0, self._update_progress, current, total
+                ),
+            )
+        except Exception as exc:
+            self.after(0, self._on_split_failed, str(exc))
+            return
+
+        self.after(0, self._on_split_complete, result, MODE_HTML)
 
     def _update_progress(self, current: int, total: int) -> None:
         if total <= 0:
@@ -177,18 +262,23 @@ class MemoSplitterApp(ctk.CTk):
             return
         self.progress_var.set(current / total)
 
-    def _on_split_complete(self, result) -> None:
+    def _on_split_complete(self, result, mode: str = MODE_XLSX) -> None:
         self.run_button.configure(state="normal")
         self.progress_var.set(1.0)
         output_info = f", 출력 {result.output_root}" if result.output_root else ""
-        summary = (
-            f"완료: 폴더 {result.folders_created}개, "
-            f"첨부 {result.attachments_copied}개, "
-            f"이미지 임베드 {result.images_embedded}개, "
-            f"빈 행 스킵 {result.rows_skipped}개, "
-            f"첨부 스킵 {len(result.attachment_skips)}건"
-            f"{output_info}"
+        parts = [
+            f"완료: 폴더 {result.folders_created}개",
+            f"첨부 {result.attachments_copied}개",
+        ]
+        if mode == MODE_XLSX:
+            parts.append(f"이미지 임베드 {result.images_embedded}개")
+        parts.extend(
+            [
+                f"빈 행 스킵 {result.rows_skipped}개",
+                f"첨부 스킵 {len(result.attachment_skips)}건",
+            ]
         )
+        summary = ", ".join(parts) + output_info
         self.status_var.set(summary)
         self._append_log(summary)
         if result.row_errors:
