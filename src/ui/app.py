@@ -81,15 +81,14 @@ class MemoSplitterApp(ctk.CTk):
         )
         self.input_button.grid(row=0, column=2, padx=12, pady=10)
 
-        ctk.CTkLabel(self.form, text="Multimedia 폴더").grid(
-            row=1, column=0, sticky="w", padx=12, pady=10
+        self.multimedia_label = ctk.CTkLabel(self.form, text="Multimedia 폴더")
+        self.multimedia_label.grid(row=1, column=0, sticky="w", padx=12, pady=10)
+        self.multimedia_entry = ctk.CTkEntry(self.form, textvariable=self.multimedia_var)
+        self.multimedia_entry.grid(row=1, column=1, sticky="ew", padx=12, pady=10)
+        self.multimedia_button = ctk.CTkButton(
+            self.form, text="폴더", width=70, command=self._browse_multimedia
         )
-        ctk.CTkEntry(self.form, textvariable=self.multimedia_var).grid(
-            row=1, column=1, sticky="ew", padx=12, pady=10
-        )
-        ctk.CTkButton(self.form, text="폴더", width=70, command=self._browse_multimedia).grid(
-            row=1, column=2, padx=12, pady=10
-        )
+        self.multimedia_button.grid(row=1, column=2, padx=12, pady=10)
 
         self.sheet_label = ctk.CTkLabel(self.form, text="SHEET")
         self.sheet_label.grid(row=2, column=0, sticky="w", padx=12, pady=10)
@@ -131,6 +130,9 @@ class MemoSplitterApp(ctk.CTk):
         if is_xlsx:
             self.subtitle.configure(text=SUBTITLE_XLSX)
             self.input_label.configure(text="INPUT XLSX")
+            self.multimedia_label.grid()
+            self.multimedia_entry.grid()
+            self.multimedia_button.grid()
             self.sheet_label.grid()
             self.sheet_combo.grid()
             self.header_label.grid()
@@ -138,6 +140,9 @@ class MemoSplitterApp(ctk.CTk):
         else:
             self.subtitle.configure(text=SUBTITLE_HTML)
             self.input_label.configure(text="INPUT HTML")
+            self.multimedia_label.grid_remove()
+            self.multimedia_entry.grid_remove()
+            self.multimedia_button.grid_remove()
             self.sheet_label.grid_remove()
             self.sheet_combo.grid_remove()
             self.header_label.grid_remove()
@@ -186,12 +191,10 @@ class MemoSplitterApp(ctk.CTk):
             return
 
         input_path = Path(self.input_var.get().strip())
-        multimedia_root = Path(self.multimedia_var.get().strip())
 
         if self.mode_var.get() == MODE_HTML:
             config: SplitConfig | HtmlSplitConfig = HtmlSplitConfig(
                 input_path=input_path,
-                multimedia_root=multimedia_root,
             )
             worker_target = self._run_html_split_thread
         else:
@@ -208,7 +211,7 @@ class MemoSplitterApp(ctk.CTk):
 
             config = SplitConfig(
                 input_path=input_path,
-                multimedia_root=multimedia_root,
+                multimedia_root=Path(self.multimedia_var.get().strip()),
                 sheet_name=sheet_name,
                 header_row=header_row,
             )

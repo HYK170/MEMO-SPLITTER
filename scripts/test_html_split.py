@@ -16,6 +16,7 @@ from src.filename_builder import build_html_filename
 from src.html_splitter import (
     HtmlSplitConfig,
     extract_href_paths,
+    extract_styles,
     rewrite_local_urls,
     split_html,
 )
@@ -34,6 +35,12 @@ TINY_PNG = _tiny_png_bytes()
 
 SAMPLE_HTML = """<!DOCTYPE html>
 <html>
+<head>
+  <link rel="stylesheet" href="css/app.css">
+  <style>
+    body { background: url(images/bg.png); }
+  </style>
+</head>
 <body>
 <table>
   <thead>
@@ -118,6 +125,13 @@ def test_extract_href_paths() -> None:
     assert extract_href_paths(html) == ["images/shot.png", "docs/memo.txt"]
 
 
+def test_extract_styles() -> None:
+    hrefs, styles = extract_styles(SAMPLE_HTML)
+    assert hrefs == ["css/app.css"]
+    assert len(styles) == 1
+    assert "url(images/bg.png)" in styles[0]
+
+
 def test_is_row_empty() -> None:
     table = parse_first_table(SAMPLE_HTML)
     assert is_row_empty(table.rows[1])
@@ -138,9 +152,14 @@ def test_rewrite_local_urls() -> None:
 
 
 def test_build_split_html_preserves_markup() -> None:
-    out = build_split_html(["첨부파일"], ['<a href="a.png"><img src="a.png"></a>'])
+    out = build_split_html(
+        ["첨부파일"],
+        ['<a href="a.png"><img src="a.png"></a>'],
+        head_extra='<link rel="stylesheet" href="memo_001_attach/app.css">',
+    )
     assert "<th>첨부파일</th>" in out
     assert '<td><a href="a.png"><img src="a.png"></a></td>' in out
+    assert 'href="memo_001_attach/app.css"' in out
     assert "<!DOCTYPE html>" in out
 
 
@@ -148,15 +167,28 @@ def test_split_html_integration() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         input_path = root / "memo.html"
-        multimedia = root / "Multimedia"
-        (multimedia / "images").mkdir(parents=True)
-        (multimedia / "docs").mkdir(parents=True)
-        (multimedia / "images" / "shot.png").write_bytes(TINY_PNG)
-        (multimedia / "docs" / "memo.txt").write_text("hello", encoding="utf-8")
-        input_path.write_text(SAMPLE_HTML, encoding="utf-8")
+        (root / "images").mkdir(parents=True)
+        (root / "docs").mkdir(parents=True)
+        (root / "css").mkdir(parents=True)
+        (root / "images" / "shot.png").write_bytes(TINY_PNG)
+        (root / "images" / "bg.png").write_bytes(TINY_PNG)
+        (root / "docs" / "memo.txt").write_text("hello", encoding="utf-8")
+        (root / "css" / "app.css").write_text(
+            "td { color: red; background: url(../images/bg.png); }",
+            encoding="utf-8",
+        )
+        # Multimedia 밖 경로도 INPUT HTML 기준으로 복사되어야 함
+        outside = root / "outside"
+        outside.mkdir()
+        (outside / "extra.png").write_bytes(TINY_PNG)
+        html = SAMPLE_HTML.replace(
+            'href="images/shot.png">shot.png',
+            'href="images/shot.png">shot.png</a><br><a href="outside/extra.png">extra',
+        )
+        input_path.write_text(html, encoding="utf-8")
 
         result = split_html(
-            HtmlSplitConfig(input_path=input_path, multimedia_root=multimedia),
+            HtmlSplitConfig(input_path=input_path),
             on_log=print,
         )
 
@@ -164,16 +196,21 @@ def test_split_html_integration() -> None:
         assert result.output_root.parent == root
         assert result.output_root.name.startswith("memo_")
         assert result.folders_created == 3
-        assert result.attachments_copied == 3
         assert result.images_embedded == 0
         assert result.rows_skipped == 1
-        assert not result.attachment_skips
+        assert not any("Multimedia 밖" in s for s in result.attachment_skips)
         assert not result.row_errors
 
         folder1 = result.output_root / "memo_001"
         attachments1 = folder1 / "memo_001_attach"
         assert (attachments1 / "shot.png").is_file()
         assert (attachments1 / "memo.txt").is_file()
+        assert (attachments1 / "extra.png").is_file()
+        assert (attachments1 / "app.css").is_file()
+        assert any(attachments1.glob("bg*.png"))
+
+        css_text = (attachments1 / "app.css").read_text(encoding="utf-8")
+        assert "url(bg.png)" in css_text or 'url("bg.png")' in css_text
 
         first_html = folder1 / "memo_001_회의록.html"
         assert first_html.is_file()
@@ -181,7 +218,8 @@ def test_split_html_integration() -> None:
         assert "<th>App</th>" in content
         assert "<td>Kakao</td>" in content
         assert 'href="memo_001_attach/shot.png"' in content
-        assert 'href="memo_001_attach/memo.txt"' in content
+        assert 'href="memo_001_attach/app.css"' in content
+        assert "memo_001_attach/bg" in content
         assert "images/shot.png" not in content
         assert content.count("<tr>") == 2
 
@@ -199,6 +237,7 @@ def main() -> None:
     test_parse_omitted_end_tags()
     test_parse_th_without_thead()
     test_extract_href_paths()
+    test_extract_styles()
     test_rewrite_local_urls()
     test_is_row_empty()
     test_build_html_filename()

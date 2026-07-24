@@ -59,6 +59,51 @@ def normalize_relative_path(relative: str) -> str:
     return cleaned.lstrip("/")
 
 
+def resolve_path_from_base(base_dir: Path, path_str: str) -> Path:
+    """INPUT HTML 기준(또는 절대경로)으로 로컬 파일 경로를 해석한다. 범위 제한 없음."""
+    raw = path_str.strip().strip('"').strip("'")
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    cleaned = normalize_relative_path(raw)
+    return (base_dir / cleaned).resolve()
+
+
+def copy_paths_from_base(
+    paths: list[str],
+    base_dir: Path,
+    dest_folder: Path,
+) -> MultimediaCopyResult:
+    """base_dir(또는 절대경로) 기준으로 파일을 복사한다. 폴더 밖 스킵 없음."""
+    result = MultimediaCopyResult()
+    for original in paths:
+        key = original.strip()
+        if not key:
+            continue
+        source = resolve_path_from_base(base_dir, key)
+        if not source.is_file():
+            result.skipped.append(f"파일 없음: {original}")
+            continue
+
+        dest_folder.mkdir(parents=True, exist_ok=True)
+        dest = unique_dest_path(dest_folder, source.name)
+        try:
+            shutil.copy2(source, dest)
+        except OSError as exc:
+            result.skipped.append(f"복사 실패 ({source.name}): {exc}")
+            continue
+
+        result.copied.append(dest.name)
+        norm_key = normalize_relative_path(key) if not Path(key).is_absolute() else key.replace("\\", "/")
+        result.path_map[norm_key] = dest.name
+        result.path_map[key] = dest.name
+        result.path_map.setdefault(source.name, dest.name)
+        if is_image_file(dest):
+            result.image_paths.append(dest)
+
+    return result
+
+
 def copy_multimedia_for_row(
     cell_value: object,
     multimedia_root: Path,
@@ -90,7 +135,6 @@ def copy_multimedia_for_row(
 
         result.copied.append(dest.name)
         result.path_map[key] = dest.name
-        # basename만 있는 참조도 매칭되도록
         result.path_map.setdefault(source.name, dest.name)
         if is_image_file(dest):
             result.image_paths.append(dest)

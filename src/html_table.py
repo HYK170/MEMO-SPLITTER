@@ -259,15 +259,21 @@ def is_row_empty(cells: list[Cell]) -> bool:
     return all(not cell.text.strip() for cell in cells)
 
 
-def build_split_html(header_cells_html: list[str], data_cells_html: list[str]) -> str:
+def build_split_html(
+    header_cells_html: list[str],
+    data_cells_html: list[str],
+    head_extra: str = "",
+) -> str:
     header_tds = "".join(f"<th>{html}</th>" for html in header_cells_html)
     data_tds = "".join(f"<td>{html}</td>" for html in data_cells_html)
+    extra = f"{head_extra}\n" if head_extra else ""
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ko">\n'
         "<head>\n"
         '<meta charset="utf-8">\n'
         "<title>split</title>\n"
+        f"{extra}"
         "</head>\n"
         "<body>\n"
         "<table>\n"

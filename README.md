@@ -1,6 +1,6 @@
 # MEMO SPLITTER
 
-INPUT XLSX 또는 HTML의 테이블을 **HEADER 1행 + 데이터 1행** 단위로 분할하고, Multimedia 폴더의 첨부파일을 함께 복사합니다.
+INPUT XLSX 또는 HTML의 테이블을 **HEADER 1행 + 데이터 1행** 단위로 분할합니다.
 
 앱에서 **XLSX / HTML 모드**를 전환할 수 있습니다.
 
@@ -30,24 +30,24 @@ python main.py
 
 1. 상단에서 **XLSX** 또는 **HTML** 모드 선택
 2. **INPUT** — 분할할 원본 파일
-3. **Multimedia 폴더** — 첨부 상대 경로의 기준 루트
-4. **SPLIT 실행** 클릭
+3. **SPLIT 실행** 클릭
 
 결과는 INPUT과 **같은 경로**에 `{원본파일명}_{YYYYMMDDHHMMSS}` 폴더를 만들고 그 안에 저장합니다.
 
 ### XLSX 모드 추가 입력
 
+- **Multimedia 폴더** — `저장된 파일 이름` 컬럼의 상대 경로 기준 루트
 - **SHEET** — 분할 대상 시트명
 - **HEADER ROW** — 헤더 행 번호 (1-based)
 
 ### HTML 모드
 
-- SHEET / HEADER ROW 지정 불필요
+- Multimedia / SHEET / HEADER ROW 지정 불필요
 - INPUT HTML의 **첫 번째 `<table>`**만 사용
 - 헤더: `<thead>` 첫 행, 없으면 `<th>`가 있는 첫 `<tr>`
-- 첨부는 `첨부파일` 열의 `<a href>` / `<img src>` 상대 경로로 Multimedia에서 복사
-- 출력 HTML의 `href`/`src`는 `{행폴더}/{첨부폴더}/파일명` 기준으로 다시 씀
-- 셀 마크업은 경로만 수정하고 나머지 HTML은 유지 (이미지 임베드 없음)
+- 첨부·CSS 경로는 **INPUT HTML 파일 위치** 기준으로 해석 (Multimedia 밖 스킵 없음)
+- `<link rel="stylesheet">` / `<style>` / `url(...)` 도 행 폴더의 첨부 폴더로 복사·경로 재작성
+- 출력 HTML의 `href`/`src`는 `{첨부폴더}/파일명` 기준으로 다시 씀
 
 ## INPUT 형식
 
@@ -65,7 +65,7 @@ python main.py
 
 - `App`
 - `본문` — `제목 : ` 접두어 이후 첫 줄을 파일명에 사용 (없으면 `제목없음`)
-- `첨부파일` (`첨부 파일`도 동일 취급) — 셀 안 `<a href>`의 **상대 경로**로 Multimedia 파일 복사. `http(s):` 등 외부 링크는 무시
+- `첨부파일` (`첨부 파일`도 동일 취급) — 셀 안 `<a href>` / `<img src>` 로컬 경로 복사. `http(s):` 등 외부 링크는 무시
 
 ## 출력 구조
 
@@ -88,19 +88,21 @@ python main.py
 ```
 [INPUT 경로]/
 ├── memo.html
+├── css/app.css
 └── memo_20260714132400/
     ├── memo_001/
     │   ├── memo_001_회의록.html
     │   └── memo_001_attach/
     │       ├── shot.png
-    │       └── memo.txt
+    │       ├── app.css
+    │       └── bg.png
     └── ...
 ```
 
 - 출력 루트: `{원본파일명}_{timestamp}` (초 단위 시리얼, 충돌 시 `_2`, `_3` …)
 - 행별 폴더명: `{원본파일명}_{행번호0패딩}`
 - 파일명: `{원본파일명}_{행번호0패딩}_{제목}.xlsx` 또는 `.html`
-- 첨부파일: 행 폴더 하위 `{원본파일명}_{행번호}_attach/`에 저장 (첨부 있을 때만 생성)
+- 첨부/CSS: 행 폴더 하위 `{원본파일명}_{행번호}_attach/`에 저장
 - 분할 결과: 항상 **헤더 1행 + 데이터 1행**
 - XLSX: 이미지는 파일 복사 + `첨부 파일` 열에 임베드
-- HTML: `첨부파일` 열 `a href`/`img src` 상대 경로로 파일 복사 후, export HTML에서는 `{첨부폴더}/파일명`으로 경로 재작성
+- HTML: INPUT 기준 로컬 파일 복사 후 export HTML/CSS 경로를 `{첨부폴더}/파일명`으로 재작성
