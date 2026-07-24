@@ -35,10 +35,12 @@ def build_attachments_folder_name(base_name: str, row_index: int) -> str:
 def build_xlsx_filename(
     base_name: str,
     row_index: int,
+    body: str | None,
     existing_names: set[str] | None = None,
 ) -> str:
     row_no = str(row_index).zfill(3)
-    filename = sanitize_windows_filename(f"{base_name}_{row_no}.xlsx")
+    title = sanitize_windows_filename(parse_title(body))
+    filename = sanitize_windows_filename(f"{base_name}_{row_no}_{title}.xlsx")
 
     if len(filename) > MAX_FILENAME_LEN:
         stem = filename[: MAX_FILENAME_LEN - 5]

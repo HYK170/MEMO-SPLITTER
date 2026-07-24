@@ -124,7 +124,7 @@ def main() -> None:
         assert (attachments1 / "memo.txt").is_file()
         assert not (folder1 / "shot.png").exists()
 
-        first_xlsx = folder1 / "memo_001.xlsx"
+        first_xlsx = folder1 / "memo_001_회의록.xlsx"
         assert first_xlsx.is_file()
         check_wb = load_workbook(first_xlsx)
         check_ws = check_wb.active

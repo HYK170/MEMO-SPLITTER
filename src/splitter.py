@@ -151,8 +151,9 @@ def split_workbook(
                 log(message)
                 continue
 
+            body_value = ws.cell(row=data_row, column=column_map["본문"]).value
             saved_names = ws.cell(row=data_row, column=column_map[SAVED_NAME_COLUMN]).value
-            xlsx_name = build_xlsx_filename(base_name, row_index)
+            xlsx_name = build_xlsx_filename(base_name, row_index, body_value)
             xlsx_path = row_folder / xlsx_name
 
             attachments_folder = row_folder / build_attachments_folder_name(base_name, row_index)
