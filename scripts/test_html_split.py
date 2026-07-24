@@ -13,7 +13,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from PIL import Image as PILImage
 
 from src.filename_builder import build_html_filename
-from src.html_splitter import HtmlSplitConfig, extract_href_paths, split_html
+from src.html_splitter import (
+    HtmlSplitConfig,
+    extract_href_paths,
+    rewrite_local_urls,
+    split_html,
+)
 from src.html_table import build_split_html, is_row_empty, parse_first_table
 
 
@@ -124,6 +129,14 @@ def test_build_html_filename() -> None:
     assert name == "memo_001_회의록.html"
 
 
+def test_rewrite_local_urls() -> None:
+    html = '<a href="images/shot.png"><img src="./images/shot.png"></a>'
+    out = rewrite_local_urls(html, "memo_001_attach", {"images/shot.png": "shot.png"})
+    assert 'href="memo_001_attach/shot.png"' in out
+    assert 'src="memo_001_attach/shot.png"' in out
+    assert "images/shot.png" not in out
+
+
 def test_build_split_html_preserves_markup() -> None:
     out = build_split_html(["첨부파일"], ['<a href="a.png"><img src="a.png"></a>'])
     assert "<th>첨부파일</th>" in out
@@ -167,8 +180,15 @@ def test_split_html_integration() -> None:
         content = first_html.read_text(encoding="utf-8")
         assert "<th>App</th>" in content
         assert "<td>Kakao</td>" in content
-        assert 'href="images/shot.png"' in content
+        assert 'href="memo_001_attach/shot.png"' in content
+        assert 'href="memo_001_attach/memo.txt"' in content
+        assert "images/shot.png" not in content
         assert content.count("<tr>") == 2
+
+        folder3 = result.output_root / "memo_003"
+        content3 = (folder3 / "memo_003_긴급 공지.html").read_text(encoding="utf-8")
+        assert 'href="memo_003_attach/shot.png"' in content3
+        assert 'src="memo_003_attach/shot.png"' in content3
 
         folder2 = result.output_root / "memo_002"
         assert (folder2 / "memo_002_제목없음.html").is_file()
@@ -179,6 +199,7 @@ def main() -> None:
     test_parse_omitted_end_tags()
     test_parse_th_without_thead()
     test_extract_href_paths()
+    test_rewrite_local_urls()
     test_is_row_empty()
     test_build_html_filename()
     test_build_split_html_preserves_markup()

@@ -13,6 +13,8 @@ class MultimediaCopyResult:
     copied: list[str] = field(default_factory=list)
     image_paths: list[Path] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    # 원본 상대경로(정규화) -> 복사된 파일명
+    path_map: dict[str, str] = field(default_factory=dict)
 
 
 def parse_saved_file_names(cell_value: object) -> list[str]:
@@ -50,6 +52,13 @@ def unique_dest_path(folder: Path, filename: str) -> Path:
         counter += 1
 
 
+def normalize_relative_path(relative: str) -> str:
+    cleaned = relative.replace("\\", "/").strip()
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return cleaned.lstrip("/")
+
+
 def copy_multimedia_for_row(
     cell_value: object,
     multimedia_root: Path,
@@ -58,7 +67,10 @@ def copy_multimedia_for_row(
     result = MultimediaCopyResult()
     root = multimedia_root.resolve()
     for relative in parse_saved_file_names(cell_value):
-        source = resolve_multimedia_path(root, relative)
+        key = normalize_relative_path(relative)
+        if not key:
+            continue
+        source = resolve_multimedia_path(root, key)
         try:
             source.relative_to(root)
         except ValueError:
@@ -77,6 +89,9 @@ def copy_multimedia_for_row(
             continue
 
         result.copied.append(dest.name)
+        result.path_map[key] = dest.name
+        # basename만 있는 참조도 매칭되도록
+        result.path_map.setdefault(source.name, dest.name)
         if is_image_file(dest):
             result.image_paths.append(dest)
 
