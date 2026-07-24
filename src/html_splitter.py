@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import os
 import re
-import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +17,6 @@ from src.multimedia_copier import (
     copy_paths_from_base,
     normalize_relative_path,
     resolve_path_from_base,
-    unique_dest_path,
 )
 from src.splitter import SplitResult, build_memo_output_root
 
@@ -64,6 +63,14 @@ def _read_html_text(path: Path) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def path_relative_to(from_dir: Path, target: Path) -> str:
+    """from_dir 기준 target 상대경로(posix)."""
+    try:
+        return Path(os.path.relpath(target.resolve(), start=from_dir.resolve())).as_posix()
+    except ValueError:
+        return target.resolve().as_posix()
+
+
 def split_html(
     config: HtmlSplitConfig,
     on_log: LogCallback | None = None,
@@ -95,8 +102,7 @@ def split_html(
     result.rows_skipped = len(table.rows) - len(data_rows)
     total = len(data_rows)
     base_name = config.input_path.stem
-    header_html = table.header_cells_html
-    col_count = len(header_html)
+    col_count = len(table.header_cells_html)
     log(f"처리 대상 행: {total}")
 
     for row_index, cells in enumerate(data_rows, start=1):
@@ -117,34 +123,44 @@ def split_html(
         padded = _pad_cells(cells, col_count)
         body_value = padded[column_map["본문"]].text
         attach_folder_name = build_attachments_folder_name(base_name, row_index)
-        relative_paths = extract_local_paths("".join(cell.html for cell in padded))
+        # a href만 복사 (img src 썸네일은 복사하지 않음)
+        href_paths = extract_href_only_paths("".join(cell.html for cell in padded))
         html_name = build_html_filename(base_name, row_index, body_value)
         html_path = row_folder / html_name
 
         attachments_folder = row_folder / attach_folder_name
-        copy_result = copy_paths_from_base(relative_paths, base_dir, attachments_folder)
+        copy_result = copy_paths_from_base(href_paths, base_dir, attachments_folder)
         result.attachments_copied += len(copy_result.copied)
         result.attachment_skips.extend(copy_result.skipped)
 
-        head_extra, css_copied, css_skips = prepare_head_assets(
+        head_extra = prepare_head_assets(
             stylesheet_hrefs,
             style_blocks,
             base_dir,
             row_folder,
-            attach_folder_name,
         )
-        result.attachments_copied += css_copied
-        result.attachment_skips.extend(css_skips)
 
         try:
             data_html = [
-                rewrite_local_urls(cell.html, attach_folder_name, copy_result.path_map)
+                rewrite_cell_urls(
+                    cell.html,
+                    attach_folder_name=attach_folder_name,
+                    path_map=copy_result.path_map,
+                    base_dir=base_dir,
+                    row_folder=row_folder,
+                )
                 for cell in padded
             ]
-            content = build_split_html(header_html, data_html, head_extra=head_extra)
+            content = build_split_html(
+                data_html,
+                table_open_tag=table.table_open_tag,
+                colgroup_html=table.colgroup_html,
+                thead_html=table.thead_html,
+                head_extra=head_extra,
+            )
             html_path.write_text(content, encoding="utf-8")
         except OSError as exc:
-            message = f"행 {row_index}: HTML 저장 실패 ({html_path.name}) - {exc}"
+            message = f"행 {row_index}: HTML 저장 실패 ({html_name}) - {exc}"
             result.row_errors.append(message)
             log(message)
             continue
@@ -155,8 +171,6 @@ def split_html(
             log(f"  첨부 복사: {name}")
         for skipped in copy_result.skipped:
             log(f"  첨부 스킵: {skipped}")
-        for skipped in css_skips:
-            log(f"  CSS 스킵: {skipped}")
 
     return result
 
@@ -173,10 +187,9 @@ def extract_styles(html_text: str) -> tuple[list[str], list[str]]:
             continue
         if _is_external_or_special_href(href):
             continue
-        key = href
-        if key in seen:
+        if href in seen:
             continue
-        seen.add(key)
+        seen.add(href)
         hrefs.append(href)
 
     styles = [m.group(1) for m in _STYLE_TAG_RE.finditer(html_text or "")]
@@ -188,96 +201,27 @@ def prepare_head_assets(
     style_blocks: list[str],
     base_dir: Path,
     row_folder: Path,
-    attach_folder_name: str,
-) -> tuple[str, int, list[str]]:
-    """CSS 파일을 행 폴더에 복사하고 head용 link/style 마크업을 만든다."""
+) -> str:
+    """CSS는 복사하지 않고, split HTML 기준 원본 파일 상대경로만 넣는다."""
     parts: list[str] = []
-    copied = 0
-    skips: list[str] = []
-    attach_folder = row_folder / attach_folder_name
-
     for href in stylesheet_hrefs:
-        source = resolve_path_from_base(base_dir, href)
-        if not source.is_file():
-            skips.append(f"CSS 파일 없음: {href}")
-            continue
-        try:
-            attach_folder.mkdir(parents=True, exist_ok=True)
-            dest = unique_dest_path(attach_folder, source.name)
-            css_text = source.read_text(encoding="utf-8", errors="replace")
-            rewritten, asset_copied, asset_skips = rewrite_css_urls(
-                css_text,
-                source.parent,
-                attach_folder,
-            )
-            dest.write_text(rewritten, encoding="utf-8")
-            copied += 1 + asset_copied
-            skips.extend(asset_skips)
-            rel = f"{attach_folder_name}/{dest.name}".replace("\\", "/")
-            parts.append(f'<link rel="stylesheet" href="{rel}">')
-        except OSError as exc:
-            skips.append(f"CSS 복사 실패 ({href}): {exc}")
+        target = resolve_path_from_base(base_dir, href)
+        rel = path_relative_to(row_folder, target)
+        parts.append(f'<link rel="stylesheet" href="{rel}">')
 
     for block in style_blocks:
-        rewritten, asset_copied, asset_skips = rewrite_css_urls(
-            block,
-            base_dir,
-            attach_folder,
-        )
-        copied += asset_copied
-        skips.extend(asset_skips)
-        # style 안 url()은 attach 폴더 기준 상대경로로 맞춤
-        rewritten = _prefix_css_urls_with_attach(rewritten, attach_folder_name)
+        rewritten = rewrite_css_urls_to_original(block, base_dir, row_folder)
         parts.append(f"<style>\n{rewritten}\n</style>")
 
-    return "\n".join(parts), copied, skips
+    return "\n".join(parts)
 
 
-def rewrite_css_urls(
+def rewrite_css_urls_to_original(
     css_text: str,
     css_base_dir: Path,
-    dest_folder: Path,
-) -> tuple[str, int, list[str]]:
-    """CSS url(...) 로컬 자산을 dest_folder로 복사하고 파일명만 남긴다."""
-    copied = 0
-    skips: list[str] = []
-    path_map: dict[str, str] = {}
-
-    def replacer(match: re.Match[str]) -> str:
-        nonlocal copied
-        raw = match.group("quoted")
-        if raw is None:
-            raw = (match.group("unquoted") or "").strip()
-        original = raw.strip()
-        if not original or _is_external_or_special_href(original):
-            return match.group(0)
-        if original in path_map:
-            return f"url({path_map[original]})"
-
-        source = resolve_path_from_base(css_base_dir, original)
-        if not source.is_file():
-            skips.append(f"CSS 자산 없음: {original}")
-            return match.group(0)
-        try:
-            dest_folder.mkdir(parents=True, exist_ok=True)
-            dest = unique_dest_path(dest_folder, source.name)
-            shutil.copy2(source, dest)
-        except OSError as exc:
-            skips.append(f"CSS 자산 복사 실패 ({original}): {exc}")
-            return match.group(0)
-
-        path_map[original] = dest.name
-        copied += 1
-        quote = match.group(1) or ""
-        if quote:
-            return f"url({quote}{dest.name}{quote})"
-        return f"url({dest.name})"
-
-    return _CSS_URL_RE.sub(replacer, css_text), copied, skips
-
-
-def _prefix_css_urls_with_attach(css_text: str, attach_folder_name: str) -> str:
-    """inline style의 url(file)을 url(attach/file)로 바꾼다."""
+    row_folder: Path,
+) -> str:
+    """CSS url(...)을 원본 자산 상대경로로만 다시 쓴다(복사 없음)."""
 
     def replacer(match: re.Match[str]) -> str:
         raw = match.group("quoted")
@@ -288,18 +232,38 @@ def _prefix_css_urls_with_attach(css_text: str, attach_folder_name: str) -> str:
         original = raw.strip()
         if not original or _is_external_or_special_href(original):
             return match.group(0)
-        if "/" in original.replace("\\", "/") or original.startswith(attach_folder_name):
-            return match.group(0)
-        new_url = f"{attach_folder_name}/{original}".replace("\\", "/")
+        target = resolve_path_from_base(css_base_dir, original)
+        rel = path_relative_to(row_folder, target)
         if quote:
-            return f"url({quote}{new_url}{quote})"
-        return f"url({new_url})"
+            return f"url({quote}{rel}{quote})"
+        return f"url({rel})"
 
     return _CSS_URL_RE.sub(replacer, css_text)
 
 
+def extract_href_only_paths(cell_html: str) -> list[str]:
+    """셀 HTML의 a href 로컬 경로만 추출한다(img src 제외)."""
+    paths: list[str] = []
+    seen: set[str] = set()
+    for match in _ATTR_URL_RE.finditer(cell_html or ""):
+        if match.group("attr").lower() != "href":
+            continue
+        raw = match.group("quoted")
+        if raw is None:
+            raw = match.group("unquoted") or ""
+        href = raw.strip()
+        if not href or _is_external_or_special_href(href):
+            continue
+        key = _path_key(href)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        paths.append(key)
+    return paths
+
+
 def extract_local_paths(cell_html: str) -> list[str]:
-    """셀 HTML의 href/src에서 로컬 경로를 추출한다."""
+    """하위 호환: href/src 로컬 경로 추출."""
     paths: list[str] = []
     seen: set[str] = set()
     for match in _ATTR_URL_RE.finditer(cell_html or ""):
@@ -309,10 +273,7 @@ def extract_local_paths(cell_html: str) -> list[str]:
         href = raw.strip()
         if not href or _is_external_or_special_href(href):
             continue
-        if Path(href).is_absolute():
-            key = href.replace("\\", "/")
-        else:
-            key = normalize_relative_path(href)
+        key = _path_key(href)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -321,8 +282,51 @@ def extract_local_paths(cell_html: str) -> list[str]:
 
 
 def extract_href_paths(cell_html: str) -> list[str]:
-    """하위 호환: href/src 로컬 경로 추출."""
-    return extract_local_paths(cell_html)
+    return extract_href_only_paths(cell_html)
+
+
+def rewrite_cell_urls(
+    html: str,
+    *,
+    attach_folder_name: str,
+    path_map: dict[str, str],
+    base_dir: Path,
+    row_folder: Path,
+) -> str:
+    """
+    href: 복사된 첨부는 attach 경로, 그 외/원본 참조는 INPUT 기준 상대경로.
+    src(썸네일): 복사하지 않고 INPUT 기준 상대경로만 사용.
+    """
+    if not html:
+        return html
+
+    def replacer(match: re.Match[str]) -> str:
+        attr = match.group("attr")
+        raw = match.group("quoted")
+        if raw is None:
+            raw = match.group("unquoted") or ""
+        original = raw.strip()
+        if not original or _is_external_or_special_href(original):
+            return match.group(0)
+
+        quote = match.group("q")
+        attr_lower = attr.lower()
+
+        if attr_lower == "href":
+            dest_name = _lookup_path_map(original, path_map)
+            if dest_name is not None:
+                new_url = f"{attach_folder_name}/{dest_name}".replace("\\", "/")
+            else:
+                new_url = path_relative_to(row_folder, resolve_path_from_base(base_dir, original))
+        else:
+            # img src 등: 원본 경로 참조
+            new_url = path_relative_to(row_folder, resolve_path_from_base(base_dir, original))
+
+        if quote:
+            return f"{attr}={quote}{new_url}{quote}"
+        return f"{attr}={new_url}"
+
+    return _ATTR_URL_RE.sub(replacer, html)
 
 
 def rewrite_local_urls(
@@ -330,7 +334,7 @@ def rewrite_local_urls(
     attach_folder_name: str,
     path_map: dict[str, str],
 ) -> str:
-    """복사된 첨부 기준으로 href/src 상대경로를 행 폴더 기준으로 다시 쓴다."""
+    """테스트 하위 호환용: 복사 맵 기준 href/src 재작성."""
     if not html or not path_map:
         return html
 
@@ -341,21 +345,9 @@ def rewrite_local_urls(
         original = raw.strip()
         if not original or _is_external_or_special_href(original):
             return match.group(0)
-
-        candidates = [
-            original,
-            original.replace("\\", "/"),
-            normalize_relative_path(original),
-            Path(original).name,
-        ]
-        dest_name = None
-        for key in candidates:
-            if key in path_map:
-                dest_name = path_map[key]
-                break
+        dest_name = _lookup_path_map(original, path_map)
         if dest_name is None:
             return match.group(0)
-
         new_url = f"{attach_folder_name}/{dest_name}".replace("\\", "/")
         attr = match.group("attr")
         quote = match.group("q")
@@ -364,6 +356,25 @@ def rewrite_local_urls(
         return f"{attr}={new_url}"
 
     return _ATTR_URL_RE.sub(replacer, html)
+
+
+def _path_key(path_str: str) -> str:
+    if Path(path_str).is_absolute():
+        return path_str.replace("\\", "/")
+    return normalize_relative_path(path_str)
+
+
+def _lookup_path_map(original: str, path_map: dict[str, str]) -> str | None:
+    candidates = [
+        original,
+        original.replace("\\", "/"),
+        normalize_relative_path(original),
+        Path(original).name,
+    ]
+    for key in candidates:
+        if key in path_map:
+            return path_map[key]
+    return None
 
 
 def _parse_tag_attrs(tag: str) -> dict[str, str]:

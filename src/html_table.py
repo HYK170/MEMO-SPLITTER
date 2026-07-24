@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from html import escape
 from html.parser import HTMLParser
@@ -24,6 +25,8 @@ VOID_ELEMENTS = frozenset(
     }
 )
 
+_TABLE_START_RE = re.compile(r"<table\b[^>]*>", re.IGNORECASE)
+
 
 @dataclass
 class Cell:
@@ -36,6 +39,9 @@ class ParsedTable:
     headers: list[str]
     header_cells_html: list[str]
     rows: list[list[Cell]] = field(default_factory=list)
+    table_open_tag: str = "<table>"
+    colgroup_html: str = ""
+    thead_html: str = ""
 
 
 def _attrs_to_str(attrs: list[tuple[str, str | None]]) -> str:
@@ -49,8 +55,47 @@ def _attrs_to_str(attrs: list[tuple[str, str | None]]) -> str:
 
 
 def _format_start_tag(tag: str, attrs: list[tuple[str, str | None]]) -> str:
-    attr_str = _attrs_to_str(attrs)
-    return f"<{tag}{attr_str}>"
+    return f"<{tag}{_attrs_to_str(attrs)}>"
+
+
+def extract_balanced_block(html: str, tag_name: str) -> str:
+    """html 안에서 첫 번째 <tag>...</tag> 블록(중첩 허용)을 반환한다."""
+    pattern = re.compile(rf"<{tag_name}\b[^>]*>", re.IGNORECASE)
+    match = pattern.search(html)
+    if not match:
+        return ""
+    start = match.start()
+    pos = match.end()
+    depth = 1
+    token = re.compile(rf"</?{tag_name}\b[^>]*>", re.IGNORECASE)
+    for token_match in token.finditer(html, pos):
+        token_text = token_match.group(0)
+        if token_text.startswith("</"):
+            depth -= 1
+            if depth == 0:
+                return html[start : token_match.end()]
+        elif not token_text.endswith("/>"):
+            depth += 1
+    return ""
+
+
+def extract_first_table_segment(html_text: str) -> str:
+    match = _TABLE_START_RE.search(html_text or "")
+    if not match:
+        return ""
+    start = match.start()
+    pos = match.end()
+    depth = 1
+    token = re.compile(r"</?table\b[^>]*>", re.IGNORECASE)
+    for token_match in token.finditer(html_text, pos):
+        token_text = token_match.group(0)
+        if token_text.startswith("</"):
+            depth -= 1
+            if depth == 0:
+                return html_text[start : token_match.end()]
+        elif not token_text.endswith("/>"):
+            depth += 1
+    return html_text[start:]
 
 
 class _FirstTableParser(HTMLParser):
@@ -63,6 +108,7 @@ class _FirstTableParser(HTMLParser):
         self.done = False
 
         self.in_thead = False
+        self.in_colgroup = False
         self.in_tr = False
         self.in_cell = False
         self.cell_tag: Literal["th", "td"] | None = None
@@ -75,6 +121,7 @@ class _FirstTableParser(HTMLParser):
         self.thead_rows: list[list[Cell]] = []
         self.body_rows: list[list[Cell]] = []
         self.all_rows: list[tuple[list[Cell], bool]] = []
+        self.table_open_tag = "<table>"
 
     def _finish_cell(self) -> None:
         if not self.in_cell:
@@ -96,9 +143,9 @@ class _FirstTableParser(HTMLParser):
         row = self.current_row_cells
         if self.in_thead:
             self.thead_rows.append(row)
-        else:
+        elif not self.in_colgroup:
             self.body_rows.append(row)
-        self.all_rows.append((row, self.current_row_has_th))
+            self.all_rows.append((row, self.current_row_has_th))
         self.in_tr = False
         self.current_row_cells = []
         self.current_row_has_th = False
@@ -111,6 +158,7 @@ class _FirstTableParser(HTMLParser):
             if not self.in_table:
                 self.in_table = True
                 self.depth = 1
+                self.table_open_tag = _format_start_tag(tag, attrs)
             else:
                 self.depth += 1
                 if self.in_cell:
@@ -127,14 +175,24 @@ class _FirstTableParser(HTMLParser):
                     self.current_cell_text.append("\n")
             return
 
+        if tag == "colgroup":
+            self._finish_row()
+            self.in_colgroup = True
+            return
+
         if tag == "thead":
             self._finish_row()
+            self.in_colgroup = False
             self.in_thead = True
             return
 
         if tag in ("tbody", "tfoot"):
             self._finish_row()
+            self.in_colgroup = False
             self.in_thead = False
+            return
+
+        if self.in_colgroup:
             return
 
         if tag == "tr":
@@ -183,6 +241,10 @@ class _FirstTableParser(HTMLParser):
                 self.current_cell_html.append(f"</{tag}>")
             return
 
+        if tag == "colgroup":
+            self.in_colgroup = False
+            return
+
         if tag == "thead":
             self._finish_row()
             self.in_thead = False
@@ -190,6 +252,9 @@ class _FirstTableParser(HTMLParser):
 
         if tag in ("tbody", "tfoot"):
             self._finish_row()
+            return
+
+        if self.in_colgroup:
             return
 
         if tag in ("th", "td"):
@@ -241,17 +306,26 @@ def parse_first_table(html_text: str) -> ParsedTable:
                 header_idx = idx
                 break
         if header_idx is None:
-            # Excel 등: 첫 행이 <td>만 있는 헤더인 경우
             if not parser.all_rows:
                 raise ValueError("테이블 헤더 행(<th> 또는 <thead>)을 찾을 수 없습니다.")
             header_idx = 0
         header_row = parser.all_rows[header_idx][0]
         data_rows = [row for row, _ in parser.all_rows[header_idx + 1 :]]
 
+    table_segment = extract_first_table_segment(html_text)
+    colgroup_html = extract_balanced_block(table_segment, "colgroup")
+    thead_html = extract_balanced_block(table_segment, "thead")
+    if not thead_html:
+        th_cells = "".join(f"<th>{html}</th>" for html in [c.html for c in header_row])
+        thead_html = f"<thead>\n<tr>{th_cells}</tr>\n</thead>"
+
     return ParsedTable(
         headers=[cell.text for cell in header_row],
         header_cells_html=[cell.html for cell in header_row],
         rows=data_rows,
+        table_open_tag=parser.table_open_tag or "<table>",
+        colgroup_html=colgroup_html,
+        thead_html=thead_html,
     )
 
 
@@ -260,13 +334,18 @@ def is_row_empty(cells: list[Cell]) -> bool:
 
 
 def build_split_html(
-    header_cells_html: list[str],
     data_cells_html: list[str],
+    *,
+    table_open_tag: str = "<table>",
+    colgroup_html: str = "",
+    thead_html: str = "",
     head_extra: str = "",
 ) -> str:
-    header_tds = "".join(f"<th>{html}</th>" for html in header_cells_html)
     data_tds = "".join(f"<td>{html}</td>" for html in data_cells_html)
     extra = f"{head_extra}\n" if head_extra else ""
+    colgroup = f"{colgroup_html}\n" if colgroup_html else ""
+    thead = f"{thead_html}\n" if thead_html else ""
+    open_tag = table_open_tag.strip() or "<table>"
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ko">\n'
@@ -276,9 +355,12 @@ def build_split_html(
         f"{extra}"
         "</head>\n"
         "<body>\n"
-        "<table>\n"
-        f"<tr>{header_tds}</tr>\n"
+        f"{open_tag}\n"
+        f"{colgroup}"
+        f"{thead}"
+        "<tbody>\n"
         f"<tr>{data_tds}</tr>\n"
+        "</tbody>\n"
         "</table>\n"
         "</body>\n"
         "</html>\n"

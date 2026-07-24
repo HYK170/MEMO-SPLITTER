@@ -45,9 +45,9 @@ python main.py
 - Multimedia / SHEET / HEADER ROW 지정 불필요
 - INPUT HTML의 **첫 번째 `<table>`**만 사용
 - 헤더: `<thead>` 첫 행, 없으면 `<th>`가 있는 첫 `<tr>`
-- 첨부·CSS 경로는 **INPUT HTML 파일 위치** 기준으로 해석 (Multimedia 밖 스킵 없음)
-- `<link rel="stylesheet">` / `<style>` / `url(...)` 도 행 폴더의 첨부 폴더로 복사·경로 재작성
-- 출력 HTML의 `href`/`src`는 `{첨부폴더}/파일명` 기준으로 다시 씀
+- 첨부 `a href` 경로는 **INPUT HTML 파일 위치** 기준으로 해석·복사 (`Multimedia 밖 스킵` 없음)
+- `a href` 안 `img src` 썸네일·`<link rel="stylesheet">` / `<style> url(...)` 은 복사하지 않고, split HTML 기준 **원본 상대경로만** 재작성
+- 출력 테이블에 원본 `<colgroup>`, `<thead>`(및 table 속성) 포함 + 데이터 1행은 `<tbody>`로 출력
 
 ## INPUT 형식
 
@@ -65,7 +65,7 @@ python main.py
 
 - `App`
 - `본문` — `제목 : ` 접두어 이후 첫 줄을 파일명에 사용 (없으면 `제목없음`)
-- `첨부파일` (`첨부 파일`도 동일 취급) — 셀 안 `<a href>` / `<img src>` 로컬 경로 복사. `http(s):` 등 외부 링크는 무시
+- `첨부파일` (`첨부 파일`도 동일 취급) — `<a href>` 로컬 파일만 attach로 복사. 하위 `<img src>` 썸네일·외부 링크는 복사하지 않음
 
 ## 출력 구조
 
@@ -91,18 +91,17 @@ python main.py
 ├── css/app.css
 └── memo_20260714132400/
     ├── memo_001/
-    │   ├── memo_001_회의록.html
+    │   ├── memo_001_회의록.html   # CSS/썸네일은 ../../css, ../../images 참조
     │   └── memo_001_attach/
-    │       ├── shot.png
-    │       ├── app.css
-    │       └── bg.png
+    │       ├── shot.png           # a href 원본만 복사
+    │       └── memo.txt
     └── ...
 ```
 
 - 출력 루트: `{원본파일명}_{timestamp}` (초 단위 시리얼, 충돌 시 `_2`, `_3` …)
 - 행별 폴더명: `{원본파일명}_{행번호0패딩}`
 - 파일명: `{원본파일명}_{행번호0패딩}_{제목}.xlsx` 또는 `.html`
-- 첨부/CSS: 행 폴더 하위 `{원본파일명}_{행번호}_attach/`에 저장
-- 분할 결과: 항상 **헤더 1행 + 데이터 1행**
+- 첨부: 행 폴더 하위 `{원본파일명}_{행번호}_attach/` (`a href` 대상만)
+- 분할 결과: **colgroup/thead 유지 + tbody 데이터 1행**
 - XLSX: 이미지는 파일 복사 + `첨부 파일` 열에 임베드
-- HTML: INPUT 기준 로컬 파일 복사 후 export HTML/CSS 경로를 `{첨부폴더}/파일명`으로 재작성
+- HTML: `a href`만 복사, CSS·썸네일(`img src`)은 원본 경로 참조로 재작성
