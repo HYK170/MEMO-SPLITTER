@@ -166,13 +166,13 @@ def test_build_split_html_structure() -> None:
         table_open_tag='<table class="memo">',
         colgroup_html="<colgroup><col></colgroup>",
         thead_html="<thead><tr><th>첨부파일</th></tr></thead>",
-        head_extra='<link rel="stylesheet" href="../../css/app.css">',
+        head_extra='<link rel="stylesheet" href="../css/app.css">',
     )
     assert '<table class="memo">' in out
     assert "<colgroup><col></colgroup>" in out
     assert "<thead><tr><th>첨부파일</th></tr></thead>" in out
     assert "<tbody>" in out
-    assert 'href="../../css/app.css"' in out
+    assert 'href="../css/app.css"' in out
     assert "<!DOCTYPE html>" in out
 
 
@@ -203,34 +203,33 @@ def test_split_html_integration() -> None:
         assert result.rows_skipped == 1
         assert not result.row_errors
 
-        folder1 = result.output_root / "memo_001"
-        attachments1 = folder1 / "memo_001_attach"
+        attachments1 = result.output_root / "memo_001_회의록_attach"
         # href 대상만 복사, 썸네일/CSS는 복사하지 않음
         assert (attachments1 / "shot.png").is_file()
         assert (attachments1 / "memo.txt").is_file()
         assert not (attachments1 / "shot_thumb.png").exists()
         assert not (attachments1 / "app.css").exists()
         assert not (attachments1 / "bg.png").exists()
+        assert not (result.output_root / "memo_001").is_dir()
 
-        first_html = folder1 / "memo_001_회의록.html"
+        first_html = result.output_root / "memo_001_회의록.html"
         content = first_html.read_text(encoding="utf-8")
         assert "<colgroup>" in content
         assert "<thead>" in content
         assert "<tbody>" in content
         assert 'class="memo"' in content
-        assert 'href="memo_001_attach/shot.png"' in content
-        assert 'href="memo_001_attach/memo.txt"' in content
+        assert 'href="memo_001_회의록_attach/shot.png"' in content
+        assert 'href="memo_001_회의록_attach/memo.txt"' in content
         # 썸네일/CSS는 원본 상대경로 참조
         assert "shot_thumb.png" in content
         assert "attach/shot_thumb" not in content
-        assert 'href="' in content and "css/app.css" in content
-        assert "app.css" in content and "memo_001_attach/app.css" not in content
+        assert "app.css" in content and "memo_001_회의록_attach/app.css" not in content
         assert "images/bg.png" in content or "bg.png" in content
 
-        folder3 = result.output_root / "memo_003"
-        content3 = (folder3 / "memo_003_긴급 공지.html").read_text(encoding="utf-8")
-        assert 'href="memo_003_attach/shot.png"' in content3
+        content3 = (result.output_root / "memo_003_긴급 공지.html").read_text(encoding="utf-8")
+        assert 'href="memo_003_긴급 공지_attach/shot.png"' in content3
         assert "shot_thumb.png" in content3
+        assert (result.output_root / "memo_003_긴급 공지_attach" / "shot.png").is_file()
 
 
 def main() -> None:

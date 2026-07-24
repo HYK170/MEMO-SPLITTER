@@ -32,6 +32,12 @@ def build_attachments_folder_name(base_name: str, row_index: int) -> str:
     return sanitize_windows_filename(f"{base_name}_{row_no}_attach")
 
 
+def build_html_attachments_folder_name(html_filename: str) -> str:
+    """split HTML 파일명 기준 첨부 폴더명: {html stem}_attach"""
+    stem = Path(html_filename).stem
+    return sanitize_windows_filename(f"{stem}_attach")
+
+
 def build_xlsx_filename(
     base_name: str,
     row_index: int,

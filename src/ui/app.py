@@ -270,17 +270,13 @@ class MemoSplitterApp(ctk.CTk):
         self.progress_var.set(1.0)
         output_info = f", 출력 {result.output_root}" if result.output_root else ""
         parts = [
-            f"완료: 폴더 {result.folders_created}개",
+            f"완료: {'파일' if mode == MODE_HTML else '폴더'} {result.folders_created}개",
             f"첨부 {result.attachments_copied}개",
         ]
         if mode == MODE_XLSX:
             parts.append(f"이미지 임베드 {result.images_embedded}개")
-        parts.extend(
-            [
-                f"빈 행 스킵 {result.rows_skipped}개",
-                f"첨부 스킵 {len(result.attachment_skips)}건",
-            ]
-        )
+        if result.attachment_skips:
+            parts.append(f"첨부 스킵 {len(result.attachment_skips)}건")
         summary = ", ".join(parts) + output_info
         self.status_var.set(summary)
         self._append_log(summary)

@@ -48,6 +48,7 @@ python main.py
 - 첨부 `a href` 경로는 **INPUT HTML 파일 위치** 기준으로 해석·복사 (`Multimedia 밖 스킵` 없음)
 - `a href` 안 `img src` 썸네일·`<link rel="stylesheet">` / `<style> url(...)` 은 복사하지 않고, split HTML 기준 **원본 상대경로만** 재작성
 - 출력 테이블에 원본 `<colgroup>`, `<thead>`(및 table 속성) 포함 + 데이터 1행은 `<tbody>`로 출력
+- split HTML과 `{html파일명}_attach/` 를 출력 루트에 평탄하게 배치 (행 폴더 없음)
 
 ## INPUT 형식
 
@@ -90,18 +91,19 @@ python main.py
 ├── memo.html
 ├── css/app.css
 └── memo_20260714132400/
-    ├── memo_001/
-    │   ├── memo_001_회의록.html   # CSS/썸네일은 ../../css, ../../images 참조
-    │   └── memo_001_attach/
-    │       ├── shot.png           # a href 원본만 복사
-    │       └── memo.txt
+    ├── memo_001_회의록.html
+    ├── memo_001_회의록_attach/
+    │   ├── shot.png
+    │   └── memo.txt
+    ├── memo_002_제목없음.html
     └── ...
 ```
 
 - 출력 루트: `{원본파일명}_{timestamp}` (초 단위 시리얼, 충돌 시 `_2`, `_3` …)
-- 행별 폴더명: `{원본파일명}_{행번호0패딩}`
+- 행별 폴더명: `{원본파일명}_{행번호0패딩}` (XLSX만)
 - 파일명: `{원본파일명}_{행번호0패딩}_{제목}.xlsx` 또는 `.html`
-- 첨부: 행 폴더 하위 `{원본파일명}_{행번호}_attach/` (`a href` 대상만)
-- 분할 결과: **colgroup/thead 유지 + tbody 데이터 1행**
+- HTML 첨부: 출력 루트 하위 `{split html stem}_attach/` (`a href` 대상만)
+- XLSX 첨부: 행 폴더 하위 `{원본파일명}_{행번호}_attach/`
+- 분할 결과: **colgroup/thead 유지 + tbody 데이터 1행** (HTML)
 - XLSX: 이미지는 파일 복사 + `첨부 파일` 열에 임베드
 - HTML: `a href`만 복사, CSS·썸네일(`img src`)은 원본 경로 참조로 재작성

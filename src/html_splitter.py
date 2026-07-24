@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Callable
 
 from src.filename_builder import (
-    build_attachments_folder_name,
+    build_html_attachments_folder_name,
     build_html_filename,
-    build_row_folder_name,
 )
 from src.html_table import Cell, build_split_html, is_row_empty, parse_first_table
 from src.multimedia_copier import (
@@ -103,32 +102,24 @@ def split_html(
     total = len(data_rows)
     base_name = config.input_path.stem
     col_count = len(table.header_cells_html)
+    existing_html_names: set[str] = set()
     log(f"처리 대상 행: {total}")
 
     for row_index, cells in enumerate(data_rows, start=1):
         if on_progress:
             on_progress(row_index, total)
 
-        folder_name = build_row_folder_name(base_name, row_index)
-        row_folder = output_root / folder_name
-
-        try:
-            row_folder.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            message = f"행 {row_index}: 폴더 생성 실패 ({row_folder}) - {exc}"
-            result.row_errors.append(message)
-            log(message)
-            continue
-
         padded = _pad_cells(cells, col_count)
         body_value = padded[column_map["본문"]].text
-        attach_folder_name = build_attachments_folder_name(base_name, row_index)
+        html_name = build_html_filename(
+            base_name, row_index, body_value, existing_names=existing_html_names
+        )
+        attach_folder_name = build_html_attachments_folder_name(html_name)
+        html_path = output_root / html_name
         # a href만 복사 (img src 썸네일은 복사하지 않음)
         href_paths = extract_href_only_paths("".join(cell.html for cell in padded))
-        html_name = build_html_filename(base_name, row_index, body_value)
-        html_path = row_folder / html_name
 
-        attachments_folder = row_folder / attach_folder_name
+        attachments_folder = output_root / attach_folder_name
         copy_result = copy_paths_from_base(href_paths, base_dir, attachments_folder)
         result.attachments_copied += len(copy_result.copied)
         result.attachment_skips.extend(copy_result.skipped)
@@ -137,7 +128,7 @@ def split_html(
             stylesheet_hrefs,
             style_blocks,
             base_dir,
-            row_folder,
+            output_root,
         )
 
         try:
@@ -147,7 +138,7 @@ def split_html(
                     attach_folder_name=attach_folder_name,
                     path_map=copy_result.path_map,
                     base_dir=base_dir,
-                    row_folder=row_folder,
+                    row_folder=output_root,
                 )
                 for cell in padded
             ]
@@ -166,7 +157,7 @@ def split_html(
             continue
 
         result.folders_created += 1
-        log(f"행 {row_index}: {row_folder.name} 생성 ({html_name})")
+        log(f"행 {row_index}: {html_name} 생성")
         for name in copy_result.copied:
             log(f"  첨부 복사: {name}")
         for skipped in copy_result.skipped:
