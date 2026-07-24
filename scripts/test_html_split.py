@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from PIL import Image as PILImage
 
 from src.filename_builder import build_html_filename
-from src.html_splitter import HtmlSplitConfig, split_html
+from src.html_splitter import HtmlSplitConfig, extract_href_paths, split_html
 from src.html_table import build_split_html, is_row_empty, parse_first_table
 
 
@@ -35,19 +35,19 @@ SAMPLE_HTML = """<!DOCTYPE html>
     <tr>
       <th>App</th>
       <th>본문</th>
-      <th>저장된 파일 이름</th>
-      <th>첨부 파일</th>
+      <th>첨부파일</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td>Kakao</td>
       <td>제목 : 회의록<br>본문</td>
-      <td>images/shot.png<br>docs/memo.txt</td>
-      <td><img src="images/shot.png" alt="shot"></td>
+      <td>
+        <a href="images/shot.png">shot.png</a><br>
+        <a href="./docs/memo.txt">memo.txt</a>
+      </td>
     </tr>
     <tr>
-      <td></td>
       <td></td>
       <td></td>
       <td></td>
@@ -56,13 +56,11 @@ SAMPLE_HTML = """<!DOCTYPE html>
       <td>Line</td>
       <td>본문만 있음</td>
       <td></td>
-      <td></td>
     </tr>
     <tr>
       <td>Slack</td>
       <td>제목 : 긴급 공지<br>상세</td>
-      <td>images/shot.png</td>
-      <td><img src="images/shot.png"></td>
+      <td><a href="images/shot.png"><img src="images/shot.png"></a></td>
     </tr>
   </tbody>
 </table>
@@ -73,25 +71,34 @@ SAMPLE_HTML = """<!DOCTYPE html>
 
 def test_parse_first_table_thead() -> None:
     table = parse_first_table(SAMPLE_HTML)
-    assert table.headers == ["App", "본문", "저장된 파일 이름", "첨부 파일"]
+    assert table.headers == ["App", "본문", "첨부파일"]
     assert len(table.rows) == 4
     assert "회의록" in table.rows[0][1].text
-    assert "images/shot.png" in table.rows[0][2].text
-    assert "\n" in table.rows[0][2].text
-    assert '<img src="images/shot.png"' in table.rows[0][3].html
+    assert 'href="images/shot.png"' in table.rows[0][2].html
 
 
 def test_parse_th_without_thead() -> None:
     html = """
     <table>
-      <tr><th>App</th><th>본문</th><th>저장된 파일 이름</th></tr>
+      <tr><th>App</th><th>본문</th><th>첨부파일</th></tr>
       <tr><td>A</td><td>제목 : T</td><td></td></tr>
     </table>
     """
     table = parse_first_table(html)
-    assert table.headers == ["App", "본문", "저장된 파일 이름"]
+    assert table.headers == ["App", "본문", "첨부파일"]
     assert len(table.rows) == 1
     assert table.rows[0][0].text == "A"
+
+
+def test_extract_href_paths() -> None:
+    html = (
+        '<a href="images/shot.png">a</a>'
+        '<a href="./docs/memo.txt">b</a>'
+        '<a href="https://example.com/x.png">c</a>'
+        '<a href="#top">d</a>'
+        '<a href="images/shot.png">dup</a>'
+    )
+    assert extract_href_paths(html) == ["images/shot.png", "docs/memo.txt"]
 
 
 def test_is_row_empty() -> None:
@@ -105,10 +112,10 @@ def test_build_html_filename() -> None:
     assert name == "memo_001_회의록.html"
 
 
-def test_build_split_html_preserves_img() -> None:
-    out = build_split_html(["App"], ['<img src="a.png">'])
-    assert "<th>App</th>" in out
-    assert '<td><img src="a.png"></td>' in out
+def test_build_split_html_preserves_markup() -> None:
+    out = build_split_html(["첨부파일"], ['<a href="a.png"><img src="a.png"></a>'])
+    assert "<th>첨부파일</th>" in out
+    assert '<td><a href="a.png"><img src="a.png"></a></td>' in out
     assert "<!DOCTYPE html>" in out
 
 
@@ -148,7 +155,7 @@ def test_split_html_integration() -> None:
         content = first_html.read_text(encoding="utf-8")
         assert "<th>App</th>" in content
         assert "<td>Kakao</td>" in content
-        assert '<img src="images/shot.png"' in content
+        assert 'href="images/shot.png"' in content
         assert content.count("<tr>") == 2
 
         folder2 = result.output_root / "memo_002"
@@ -158,9 +165,10 @@ def test_split_html_integration() -> None:
 def main() -> None:
     test_parse_first_table_thead()
     test_parse_th_without_thead()
+    test_extract_href_paths()
     test_is_row_empty()
     test_build_html_filename()
-    test_build_split_html_preserves_img()
+    test_build_split_html_preserves_markup()
     test_split_html_integration()
     print("ALL HTML TESTS PASSED")
 

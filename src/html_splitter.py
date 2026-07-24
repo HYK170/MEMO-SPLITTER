@@ -12,13 +12,15 @@ from src.filename_builder import (
     build_row_folder_name,
 )
 from src.html_table import Cell, build_split_html, is_row_empty, parse_first_table
-from src.multimedia_copier import SAVED_NAME_COLUMN, copy_multimedia_for_row
-from src.splitter import REQUIRED_COLUMNS, SplitResult, build_memo_output_root
+from src.multimedia_copier import copy_multimedia_for_row
+from src.splitter import SplitResult, build_memo_output_root
 
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]
 
+HTML_REQUIRED_COLUMNS = ("App", "본문", "첨부파일")
 _HEADER_WHITESPACE = re.compile(r"\s+", re.UNICODE)
+_HREF_RE = re.compile(r"""href\s*=\s*(["'])(.*?)\1""", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass
@@ -82,13 +84,14 @@ def split_html(
 
         padded = _pad_cells(cells, col_count)
         body_value = padded[column_map["본문"]].text
-        saved_names = padded[column_map[SAVED_NAME_COLUMN]].text
+        attach_html = padded[column_map["첨부파일"]].html
+        relative_paths = extract_href_paths(attach_html)
         html_name = build_html_filename(base_name, row_index, body_value)
         html_path = row_folder / html_name
 
         attachments_folder = row_folder / build_attachments_folder_name(base_name, row_index)
         copy_result = copy_multimedia_for_row(
-            saved_names,
+            "\n".join(relative_paths),
             config.multimedia_root,
             attachments_folder,
         )
@@ -113,6 +116,32 @@ def split_html(
             log(f"  첨부 스킵: {skipped}")
 
     return result
+
+
+def extract_href_paths(cell_html: str) -> list[str]:
+    """첨부파일 셀 HTML의 a href에서 상대 경로만 추출한다."""
+    paths: list[str] = []
+    seen: set[str] = set()
+    for match in _HREF_RE.finditer(cell_html or ""):
+        href = match.group(2).strip()
+        if not href or _is_external_or_special_href(href):
+            continue
+        cleaned = href.replace("\\", "/")
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        cleaned = cleaned.lstrip("/")
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        paths.append(cleaned)
+    return paths
+
+
+def _is_external_or_special_href(href: str) -> bool:
+    lower = href.strip().lower()
+    if lower.startswith(("#", "mailto:", "tel:", "javascript:", "data:")):
+        return True
+    return "://" in lower
 
 
 def _normalize_header(value: object) -> str:
@@ -140,10 +169,10 @@ def _find_column(column_map: dict[str, int], name: str) -> int | None:
 
 
 def _ensure_required_columns(column_map: dict[str, int]) -> None:
-    missing = [name for name in REQUIRED_COLUMNS if _find_column(column_map, name) is None]
+    missing = [name for name in HTML_REQUIRED_COLUMNS if _find_column(column_map, name) is None]
     if missing:
         raise ValueError(f"필수 컬럼이 없습니다: {', '.join(missing)}")
-    for name in REQUIRED_COLUMNS:
+    for name in HTML_REQUIRED_COLUMNS:
         col = _find_column(column_map, name)
         if col is not None:
             column_map[name] = col
